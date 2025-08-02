@@ -1,0 +1,1 @@
+console.log('%c🌐 [Cart Aggregator] global-listener.js injected!', 'color: blue; font-weight: bold;');
