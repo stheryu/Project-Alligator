@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Your Cart</h1>
+      <button id="clear-all" class="clear">Clear All</button>
+    </header>
+    <div id="items" class="items"></div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
+  <style>
+    /* Add your styles here */
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    .topbar {
+      background-color: #f8f8f8;
+      padding: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.5em;
+    }
+    .clear {
+      background-color: #ff4d4d;
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      cursor: pointer;
+    }
+    .items {
+      padding: 10px;
+    }
+  </style>
+</html>
+<script>
+  // popup.js
+  document.addEventListener('DOMContentLoaded', () => {
+    const clearButton = document.getElementById('clear-all');
+    const itemsContainer = document.getElementById('items');

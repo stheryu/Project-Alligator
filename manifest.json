@@ -1,26 +1,48 @@
 {
   "manifest_version": 3,
-  "name": "Cart Aggregator",
-  "version": "0.1.0",
-  "description": "Aggregate your carts across sites into one view",
-  "action": { "default_popup": "popup.html" },
+  "name": "Unified Shopping Cart",
+  "version": "0.1.8",
+  "description": "Aggregate shopping carts across sites into one dashboard.",
+  "permissions": ["storage", "notifications", "alarms", "webRequest"],
+  "host_permissions": [
+    "*://*.amazon.com/*",
+    "*://*.ebay.com/*",
+    "*://*.walmart.com/*",
+    "*://*.zara.com/*",
+    "*://*.shopbop.com/*"
+  ],
   "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup/popup.html" },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content-scripts/global-listener.js"],
-      "run_at": "document_end"
+      "matches": ["*://*.shopbop.com/*"],
+      "js": ["content-scripts/shopbopAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.amazon.com/*"],
+      "js": ["content-scripts/amazonAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.walmart.com/*"],
+      "js": ["content-scripts/walmartAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.zara.com/*"],
+      "js": ["content-scripts/zaraAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.ebay.com/*"],
+      "js": ["content-scripts/genericAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
-  ],
-  "permissions": [
-    "storage",
-    "activeTab",
-    "scripting",
-    "tabs",
-    "declarativeNetRequest",
-    "declarativeNetRequestFeedback"
-  ],
-  "host_permissions": [
-    "<all_urls>"
   ]
 }
