@@ -1,5 +1,5 @@
 // background.js
-console.log("Unified Cart SW v0.1.9 starting");
+console.log("Unified Cart SW v0.1.10 starting");
 
 // Simple in-memory throttle per tab to avoid bursts
 const recentTabTriggers = new Map(); // tabId -> timestamp
@@ -38,8 +38,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Filter obvious noise just in case
     if (looksLikeNoise(msg.item)) {
       console.log("[UnifiedCart] Ignored tracking/noise item", msg.item);
-      sendResponse({ ok: true, ignored: true });
-      return; // do not keep channel open
+      try { sendResponse({ ok: true, ignored: true }); } catch {}
+      return;
     }
 
     chrome.storage.sync.get({ cart: [] }, ({ cart }) => {
@@ -62,36 +62,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             message: `${msg.item.title || "Item"} added to your unified cart.`
           });
         } catch (_) {}
-        sendResponse({ ok: true });
+        try { sendResponse({ ok: true }); } catch {}
       });
     });
     return true; // keep channel open until sendResponse
   }
 });
 
-// Network-based detection (send ONLY to top frame)
-chrome.webRequest.onBeforeRequest.addListener(
-  (details) => {
-    if (details.tabId < 0) return;
-    const u = (details.url || "").toLowerCase();
-    // Heuristic: common add-to-cart flows
-    if (!/(cart|bag|basket|add|checkout)/.test(u)) return;
+// Network-based detection — keep ONLY Amazon/eBay to avoid false positives
+try {
+  chrome.webRequest.onBeforeRequest.addListener(
+    (details) => {
+      if (details.tabId < 0) return;
+      const u = (details.url || "").toLowerCase();
+      if (!/(cart|bag|basket|add|checkout)/.test(u)) return;
+      if (!shouldNotifyTab(details.tabId)) return;
 
-    if (shouldNotifyTab(details.tabId)) {
+      // Only notify top frame; some sites load beacons in iframes
       chrome.tabs.sendMessage(
         details.tabId,
         { action: "ADD_TRIGGERED", via: "webRequest", url: details.url },
-        { frameId: 0 } // <-- only top frame
+        { frameId: 0 }
       );
+    },
+    {
+      urls: [
+        "*://*.amazon.com/*",
+        "*://*.ebay.com/*"
+        // Walmart/Shopbop/Zara disabled intentionally to prevent random triggers
+      ]
     }
-  },
-  {
-    urls: [
-      "*://*.amazon.com/*",
-      "*://*.walmart.com/*",
-      //"*://*.zara.com/*",
-      "*://*.shopbop.com/*",
-      "*://*.ebay.com/*"
-    ]
-  }
-);
+  );
+} catch (e) {
+  console.error("[UnifiedCart] webRequest listener error:", e);
+}

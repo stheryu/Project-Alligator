@@ -33,11 +33,11 @@
       "all_frames": true
     },
     {
-      "matches": ["*://*.zara.com/*"],
-      "js": ["content-scripts/zaraAddListener.js"],
-      "run_at": "document_idle",
-      "all_frames": true
-    },
+  "matches": ["*://*.zara.com/*"],
+  "js": ["content-scripts/zaraAddListener.js"],
+  "run_at": "document_idle",
+  "all_frames": true
+},
     {
       "matches": ["*://*.ebay.com/*"],
       "js": ["content-scripts/genericAddListener.js"],
