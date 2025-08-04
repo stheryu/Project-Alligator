@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Unified Shopping Cart",
-  "version": "0.1.8",
+  "version": "0.1.16",
   "description": "Aggregate shopping carts across sites into one dashboard.",
   "permissions": ["storage", "notifications", "alarms", "webRequest"],
   "host_permissions": [
@@ -30,14 +30,14 @@
       "matches": ["*://*.walmart.com/*"],
       "js": ["content-scripts/walmartAddListener.js"],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": false
     },
     {
-  "matches": ["*://*.zara.com/*"],
-  "js": ["content-scripts/zaraAddListener.js"],
-  "run_at": "document_idle",
-  "all_frames": true
-},
+      "matches": ["*://*.zara.com/*"],
+      "js": ["content-scripts/zaraAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
     {
       "matches": ["*://*.ebay.com/*"],
       "js": ["content-scripts/genericAddListener.js"],
@@ -45,4 +45,3 @@
       "all_frames": true
     }
   ]
-}

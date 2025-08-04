@@ -1,15 +1,26 @@
 // utils/storage.js
 export function getCart() {
-  return chrome.storage.sync.get({ cart: [] }).then((r) => r.cart || []);
+  return new Promise((resolve) => {
+    chrome.storage.sync.get({ cart: [] }, (res) => {
+      resolve(Array.isArray(res.cart) ? res.cart : []);
+    });
+  });
 }
+
 export function setCart(items) {
-  return chrome.storage.sync.set({ cart: items });
+  return new Promise((resolve) => {
+    chrome.storage.sync.set({ cart: Array.isArray(items) ? items : [] }, () => resolve());
+  });
 }
+
 export function clearCart() {
-  return chrome.storage.sync.set({ cart: [] });
+  return setCart([]);
 }
+
 export function removeItem(id) {
-  return getCart()
-    .then((items) => items.filter((i) => String(i.id) !== String(id)))
-    .then(setCart);
+  const key = String(id);
+  return getCart().then((items) => {
+    const next = items.filter((it) => String(it.id || "") !== key);
+    return setCart(next);
+  });
 }
