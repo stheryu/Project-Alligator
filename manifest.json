@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Unified Shopping Cart",
-  "version": "0.1.16",
+  "version": "0.1.24",
   "description": "Aggregate shopping carts across sites into one dashboard.",
   "permissions": ["storage", "notifications", "alarms", "webRequest"],
   "host_permissions": [
@@ -9,7 +9,9 @@
     "*://*.ebay.com/*",
     "*://*.walmart.com/*",
     "*://*.zara.com/*",
-    "*://*.shopbop.com/*"
+    "*://*.shopbop.com/*",
+    "*://*.net-a-porter.com/*",
+    "*://*.bergdorfgoodman.com/*"
   ],
   "background": { "service_worker": "background.js" },
   "action": { "default_popup": "popup/popup.html" },
@@ -43,5 +45,34 @@
       "js": ["content-scripts/genericAddListener.js"],
       "run_at": "document_idle",
       "all_frames": true
+    },
+
+    {
+      "matches": ["*://*.net-a-porter.com/*"],
+      "js": ["content-scripts/netaporterAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["*://*.bergdorfgoodman.com/*"],
+      "js": ["content-scripts/bergdorfAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+
+    {
+      "matches": [
+        "*://*.moojimooji.com/*",
+        "*://*.theoutnet.com//*",
+        "*://*.farfetch.com/*",
+        "*://*.matchesfashion.com/*",
+        "*://*.mytheresa.com/*",
+        "*://*.ssense.com/*"
+        
+      ],
+      "js": ["content-scripts/genericAddListener.js"],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ]
+}
