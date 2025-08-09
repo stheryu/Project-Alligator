@@ -121,67 +121,79 @@
   }
 
   // --------- PDP heuristic ----------
-  function looksLikePDP() {
-    // 1) Strong signals
-    if (parseLD()) return true;
-    if (parseShopifyProductJSON()) return true;
+function looksLikePDP() {
+  // 1) Strong signals
+  if (parseLD()) return true;
+  if (parseShopifyProductJSON()) return true;
 
-    // 2) OG product type
-    const ogType = attr('meta[property="og:type"]','content') || "";
-    if (/product/i.test(ogType)) return true;
+  // 2) OG product type
+  const ogType = attr('meta[property="og:type"]','content') || "";
+  if (/product/i.test(ogType)) return true;
 
-    // 3) Platform cues (forms/buttons that exist only on PDPs)
-    // Shopify (already handled above, but these help headless themes)
-    if ($('form[action*="/cart/add"]') || $('[name="add"]') || $('[data-add-to-cart]')) return true;
-    if ($('input[name="id"]') && ($('[type="submit"][name="add"]') || $('[data-product-form]'))) return true;
+  // 3) Platform cues (forms/buttons that exist only on PDPs)
+  // Shopify
+  if ($('form[action*="/cart/add"]') || $('[name="add"]') || $('[data-add-to-cart]')) return true;
+  if ($('input[name="id"]') && ($('[type="submit"][name="add"]') || $('[data-product-form]'))) return true;
 
-    // WooCommerce / common themes
-    if (document.querySelector("form.cart") ||
-        document.querySelector("button.single_add_to_cart_button") ||
-        document.querySelector('[name="add-to-cart"]')) return true;
+  // WooCommerce
+  if (document.querySelector("form.cart") ||
+      document.querySelector("button.single_add_to_cart_button") ||
+      document.querySelector('[name="add-to-cart"]')) return true;
 
-    // BigCommerce / generic
-    if (document.querySelector('form[action*="/cart.php"]') ||
-        document.querySelector('#form-action-addToCart') ||
-        document.querySelector('[data-button-state][data-add-to-cart]')) return true;
+  // BigCommerce
+  if (document.querySelector('form[action*="/cart.php"]') ||
+      document.querySelector('#form-action-addToCart') ||
+      document.querySelector('[data-button-state][data-add-to-cart]')) return true;
 
-    // Magento 2
-    if (document.querySelector('form#product_addtocart_form') ||
-        document.querySelector('#product-addtocart-button') ||
-        document.querySelector('[data-role="tocart"]')) return true;
+  // Magento 2
+  if (document.querySelector('form#product_addtocart_form') ||
+      document.querySelector('#product-addtocart-button') ||
+      document.querySelector('[data-role="tocart"]')) return true;
 
-    // Salesforce Commerce Cloud (Demandware)
-    if (document.querySelector('form[name="add-to-cart"]') ||
-        document.querySelector('[data-action="add-to-cart"]') ||
-        document.querySelector('button.add-to-cart')) return true;
+  // Salesforce Commerce Cloud
+  if (document.querySelector('form[name="add-to-cart"]') ||
+      document.querySelector('[data-action="add-to-cart"]') ||
+      document.querySelector('button.add-to-cart')) return true;
 
-    // PrestaShop
-    if (document.querySelector('[data-button-action="add-to-cart"]')) return true;
+  // PrestaShop
+  if (document.querySelector('[data-button-action="add-to-cart"]')) return true;
 
-    // Squarespace Commerce
-    if (document.querySelector('.sqs-add-to-cart-button') ||
-        document.querySelector('.ProductItem-addToCart')) return true;
+  // Squarespace
+  if (document.querySelector('.sqs-add-to-cart-button') ||
+      document.querySelector('.ProductItem-addToCart')) return true;
 
-    // Wix Stores
-    if (document.querySelector('button[data-hook="add-to-cart"]')) return true;
+  // Wix
+  if (document.querySelector('button[data-hook="add-to-cart"]')) return true;
 
-    // 4) Title + price token + non-pixel image
-    const hasH1 = !!$("h1");
-    if (!hasH1) return false;
-    const hasPrice = $$("span,div,p,strong,b").some(el => /[$€£]\s?\d/.test(el.textContent || ""));
-    if (!hasPrice) return false;
-    const img = $("picture img, img");
-    const src = img?.getAttribute("src") || img?.src || "";
-    if (!src || looksLikePixel(src)) return false;
+  // 4) Title + price token + non-pixel image
+  const hasH1 = !!$("h1");
+  if (!hasH1) return false;
+  const hasPrice = $$("span,div,p,strong,b").some(el => /[$€£]\s?\d/.test(el.textContent || ""));
+  if (!hasPrice) return false;
+  const img = $("picture img, img");
+  const src = img?.getAttribute("src") || img?.src || "";
+  if (!src || looksLikePixel(src)) return false;
 
-    // Exclude obvious non-PDP routes (careful not to block /handbags/)
-    const path = location.pathname.toLowerCase();
+  // 5) Exclusions — but allow Shopify /collections/.../products/... PDPs
+  const path = location.pathname.toLowerCase();
+
+  // Treat these as “product-ish” paths
+  const isProductPath =
+    /\/products?\//.test(path) ||              // Shopify
+    /\/p\//.test(path) ||                      // many headless
+    /\/dp\//.test(path) ||                     // Amazon-style
+    /\/(item|items|sku|prod|goods|shop)\//.test(path) ||
+    /-p\d+(?:\.html|$)/.test(path);            // Zara-style slugs
+
+  // Only apply exclusions if it doesn't look like a product path
+  if (!isProductPath) {
     if (/(^|\/)(cart|checkout|shopping-?bag)(\/|$)/.test(path)) return false;
     if (/(^|\/)(wishlist|account|login|register)(\/|$)/.test(path)) return false;
     if (/(^|\/)(collection|collections|category|categories|catalog)(\/|$)/.test(path)) return false;
-
-    return true;
   }
+
+  return true;
+}
 
   // --------- field extractors ----------
   function extractTitle() {
@@ -386,76 +398,4 @@
 
   function looksLikeAdd(node){
     if(!node||node.nodeType!==1) return false;
-    const s=[ node.textContent||"", node.getAttribute?.("aria-label")||"", node.getAttribute?.("data-testid")||"", node.getAttribute?.("id")||"", node.getAttribute?.("name")||"", node.getAttribute?.("class")||"", node.getAttribute?.("data-action")||"", node.getAttribute?.("data-hook")||"" ].join(" ").toLowerCase();
-    if (s.includes("adding")) return false;
-    if (NEG.test(s)) return false;
-    if (POS.test(s)) return true;
-
-    // Shopify
-    if (/\badd-to-cart\b|\bproduct-form__submit\b|\bshopify-payment-button\b/.test(s)) return true;
-
-    // WooCommerce
-    if (/\bsingle_add_to_cart_button\b|\badd_to_cart_button\b|\bwoocommerce\b/.test(s)) return true;
-
-    // BigCommerce
-    if (/\bform-action-addToCart\b|\bdata-add-to-cart\b|\badd to cart\b/.test(s)) return true;
-
-    // Magento 2
-    if (/\bproduct_addtocart_form\b|\bproduct-addtocart-button\b|\bdata-role="tocart"\b/.test(s)) return true;
-
-    // Salesforce Commerce Cloud
-    if (/\badd-to-cart\b/.test(s) && /\bdata-action\b/.test(s)) return true;
-
-    // PrestaShop
-    if (/\bdata-button-action="add-to-cart"\b/.test(s)) return true;
-
-    // Squarespace
-    if (/\bsqs-add-to-cart-button\b|\bProductItem-addToCart\b/.test(s)) return true;
-
-    // Wix
-    if (/\bdata-hook="add-to-cart"\b/.test(s)) return true;
-
-    return false;
-  }
-  function pathHasAdd(e){ const path=(e.composedPath&&e.composedPath())||[]; for(const n of path) if(looksLikeAdd(n)) return true; return false; }
-
-  ["mousedown","pointerdown","touchstart"].forEach(t => document.addEventListener(t, e => { if(pathHasAdd(e)) sendQuick(); }, true));
-  ["click","pointerup","touchend","submit","keydown"].forEach(t => document.addEventListener(t, e => { if(pathHasAdd(e)) setTimeout(sendSettled,140); }, true));
-
-  // Optional: honor background nudges (e.g., Amazon/eBay webRequest)
-  chrome.runtime?.onMessage?.addListener?.((msg)=>{
-    if (msg?.action === "ADD_TRIGGERED" && looksLikePDP()){
-      setTimeout(sendSettled, 150);
-    }
-  });
-
-  // Debug helper
-  window.__UC_GENERIC_DEBUG = () => {
-    const ld = parseLD();
-    const sj = parseShopifyProductJSON();
-    const ogImg = attr('meta[property="og:image"]','content') || attr('meta[property="og:image:secure_url"]','content');
-    const img = document.querySelector("picture img, img");
-    const imgSrc = img?.getAttribute("src") || "";
-    const imgSrcset = img?.getAttribute("srcset") || "";
-    const source = document.querySelector("picture source[srcset]");
-    const sourceSrcset = source?.getAttribute("srcset") || "";
-    const picked = extractImage();
-    const price = extractPrice();
-    const out = {
-      href: location.href,
-      pdp: looksLikePDP(),
-      ldPresent: !!ld,
-      shopifyJson: !!sj,
-      title: extractTitle(),
-      brand: extractBrand(),
-      price,
-      ogImg,
-      imgSrc, imgSrcset, sourceSrcset,
-      picked
-    };
-    console.log("[UnifiedCart-Generic DEBUG]", out);
-    return out;
-  };
-
-  log("loaded", { href: location.href, pdp: looksLikePDP() });
-})();
+    const s=[ node.textContent||"", node.getAttribute?.("aria-label")||"", node.getAttribute?.("data-testid")||"", node.getAttribute?.("id")||"", node.getAttribute?.("name")||"", node.getAtt

@@ -4,32 +4,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Unified Cart</title>
-    <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 12px; width: 360px; }
-      header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-      h1 { font-size: 16px; margin: 0; }
-      #clear-all { font-size: 12px; padding: 4px 8px; }
-      #items { display: grid; gap: 8px; }
-      .item { display: grid; grid-template-columns: 64px 1fr auto; gap: 8px; align-items: center; border: 1px solid #eee; border-radius: 8px; padding: 8px; }
-      .item img { width: 64px; height: 64px; object-fit: cover; background: #fb6f92; border-radius: 6px; }
-      .details { display: grid; gap: 2px; }
-      .details strong { font-size: 13px; line-height: 1.2; }
-      .details p { margin: 0; font-size: 12px; color: #555; }
-      .details a { font-size: 12px; text-decoration: none; }
-      .remove { border: none; background: #f3f3f3; cursor: pointer; border-radius: 50%; width: 28px; height: 28px; font-size: 16px; line-height: 28px; }
-      .empty { padding: 16px; text-align: center; color: #666; border: 1px dashed #ddd; border-radius: 8px; }
-    </style>
+    <title>Alligator — Unified Cart</title>
+    <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header>
-      <h1>Your Aggregated Cart</h1>
+      <div class="brand">
+        <img class="brand-logo" src="../icons/alligator_icon.png" alt="Alligator logo" />
+        <h1 class="brand-title">alligator</h1>
+      </div>
       <button id="clear-all" type="button">Clear All</button>
     </header>
 
-    <div id="items" role="list"></div>
+    <div id="items" role="list" aria-live="polite"></div>
 
-    <!-- Load the module AFTER the DOM -->
     <script type="module" src="popup.js"></script>
   </body>
 </html>

@@ -98,30 +98,4 @@
     "*://*/checkout*",
     "*://*/wishlist*",
     "*://*/account*",
-    "*://*/login*",
-    "*://*/register*",
-    "*://*/search*",
-    "*://*/category*",
-    "*://*/categories*",
-    "*://*/collection*",
-    "*://*/collections*",
-    "*://*/catalog*",
-    "*://*/help*",
-    "*://*/privacy*",
-    "*://*/terms*",
-    "*://*/sitemap*",
-
-    "*://*.amazon.com/*",
-    "*://*.ebay.com/*",
-    "*://*.walmart.com/*",
-    "*://*.zara.com/*",
-    "*://*.shopbop.com/*",
-    "*://*.net-a-porter.com/*",
-    "*://*.bergdorfgoodman.com/*"
-  ],
-  "js": ["content-scripts/genericAddListener.js"],
-  "run_at": "document_idle",
-  "all_frames": false
-}
-  ]
-}
+    

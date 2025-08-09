@@ -4,8 +4,6 @@ import { getCart, clearCart, removeItem } from "../utils/storage.js";
 const safeText = (v) => (v == null ? "" : String(v));
 
 // Convert a link to a readable site label.
-// If hostname ends with .com, use the label right before ".com" (e.g., www.zara.com -> "Zara").
-// Otherwise, fall back to the second-level label (co.uk etc.).
 function siteFromLink(link) {
   try {
     const { hostname } = new URL(link);
@@ -15,7 +13,6 @@ function siteFromLink(link) {
       const base = parts[parts.length - 2] || parts[0];
       return base.charAt(0).toUpperCase() + base.slice(1);
     }
-    // Handle e.g. shop.domain.co.uk -> "domain"
     const parts = h.split(".");
     if (parts.length >= 2) {
       const base = parts[parts.length - 2];
@@ -42,8 +39,12 @@ function renderItems(items, itemsContainer) {
       const price = safeText(item.price || "");
       const link  = safeText(item.link || "#");
       const site  = link && link !== "#" ? siteFromLink(link) : "View";
+
+      // Make the whole card a logical link target
       return `
-        <div class="item" role="listitem" data-id="${id}">
+        <div class="item" role="link" tabindex="0"
+             data-id="${id}" data-link="${link}"
+             aria-label="Open on ${site}">
           <img src="${img}" alt="${title}" loading="lazy" />
           <div class="details">
             <strong title="${title}">${title}</strong>
@@ -62,6 +63,16 @@ function loadAndRender(itemsContainer) {
 }
 
 function wirePopup() {
+  // Set the logo source from the packaged extension path
+  const logoEl = document.querySelector(".brand-logo");
+  if (logoEl) {
+    if (chrome?.runtime?.getURL) {
+      logoEl.src = chrome.runtime.getURL("icons/alligator_icon.png");
+    } else {
+      logoEl.src = "../icons/alligator_icon.png"; // dev fallback
+    }
+  }
+
   const itemsContainer = document.getElementById("items");
   const clearBtn = document.getElementById("clear-all");
 
@@ -70,13 +81,38 @@ function wirePopup() {
     return;
   }
 
-  // Delete (delegation)
+  // Open helper
+  const openLink = (url) => {
+    if (!url || url === "#") return;
+    try { window.open(url, "_blank", "noopener"); } catch {}
+  };
+
+  // Delegated click: remove OR open card
   itemsContainer.addEventListener("click", (e) => {
-    const btn = e.target.closest(".remove");
-    if (!btn) return;
-    const id = btn.closest(".item")?.dataset.id;
-    if (!id) return;
-    removeItem(id).then(() => loadAndRender(itemsContainer));
+    const removeBtn = e.target.closest(".remove");
+    if (removeBtn) {
+      const id = removeBtn.closest(".item")?.dataset.id;
+      if (!id) return;
+      removeItem(id).then(() => loadAndRender(itemsContainer));
+      return;
+    }
+
+    // If user clicked the inner <a>, let default behavior run
+    if (e.target.closest("a")) return;
+
+    const card = e.target.closest(".item");
+    if (card && card.dataset.link) {
+      openLink(card.dataset.link);
+    }
+  });
+
+  // Keyboard access: Enter/Space on focused card opens link
+  itemsContainer.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const card = e.target.closest(".item");
+    if (!card || !card.dataset.link) return;
+    e.preventDefault();
+    openLink(card.dataset.link);
   });
 
   // Clear all
@@ -91,7 +127,7 @@ function wirePopup() {
     }
   });
 
-  // Fallback: refresh on storage changes (still useful if popup opens after a save)
+  // Fallback: refresh on storage changes
   chrome.storage?.onChanged?.addListener?.((changes, area) => {
     if (area === "sync" && changes.cart) loadAndRender(itemsContainer);
   });
@@ -106,4 +142,4 @@ if (document.readyState === "loading") {
   wirePopup();
 }
 
-console.log("Unified Cart popup v0.1.8 loaded");
+console.log("Unified Cart popup v0.1.9 loaded");
