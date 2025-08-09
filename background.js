@@ -1,15 +1,39 @@
 // background.js — Unified Cart (MV3)
-// Version 0.1.21 — broadcasts CART_UPDATED for instant popup refresh.
+// v0.2.0 (optimistic updates + safe messaging)
 
 (() => {
-  const VERSION = "0.1.21";
-  console.log(`Unified Cart SW v${VERSION} starting`);
+  const VERSION = "0.2.0";
+  console.log(`[UnifiedCart] SW v${VERSION} starting`);
 
-  // Keep notifications off unless you’ve packaged icons in /icons
   const ENABLE_NOTIFICATIONS = false;
-
-  // ---------- utils ----------
   const str = (x) => (x == null ? "" : String(x));
+
+  // ---------------- In-memory cart (for instant UI) ----------------
+  let CART = [];
+  chrome.storage.sync.get({ cart: [] }, ({ cart }) => {
+    CART = Array.isArray(cart) ? cart : [];
+  });
+  // Keep CART in sync if something else modifies storage (e.g., popup remove/clear)
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "sync" && changes.cart) {
+      const v = changes.cart.newValue;
+      CART = Array.isArray(v) ? v : [];
+    }
+  });
+
+  // ---------------- Safe message helpers (avoid “receiving end” errors) ----------------
+  function safeRuntimeSendMessage(msg) {
+    try {
+      chrome.runtime.sendMessage(msg, () => void chrome.runtime?.lastError);
+    } catch (_) {}
+  }
+  function safeTabsSendMessage(tabId, msg, opts = {}) {
+    try {
+      chrome.tabs.sendMessage(tabId, msg, opts, () => void chrome.runtime?.lastError);
+    } catch (_) {}
+  }
+
+  // ---------------- tiny helpers ----------------
   function isTrackingImage(url = "") {
     const u = url.toLowerCase();
     return !u || u.startsWith("data:") || u.endsWith(".svg") || /p13n\.gif|pixel|1x1|spacer|beacon/.test(u);
@@ -19,21 +43,6 @@
     const p = str(item.price).trim();
     return !p && (isTrackingImage(item.img) || /p13n|1×1|1x1|pixel/.test(t));
   }
-  function notifyAdded(item) {
-    if (!ENABLE_NOTIFICATIONS) return;
-    try {
-      const iconUrl = chrome.runtime.getURL("icons/icon48.png");
-      chrome.notifications?.create?.({
-        type: "basic",
-        iconUrl,
-        title: "Item Added",
-        message: `${item.title || "Item"} added to your unified cart.`,
-        silent: true
-      });
-    } catch (e) {
-      console.warn("[UnifiedCart] notify error:", e);
-    }
-  }
   function sanitizeItem(raw = {}) {
     const item = {
       id:   str(raw.id || raw.link || ""),
@@ -41,13 +50,13 @@
       brand:str(raw.brand),
       price:str(raw.price),
       img:  str(raw.img),
-      link: str(raw.link)
+      link: str(raw.link),
     };
     if (item.img && item.img.length > 2048 && item.img.startsWith("data:")) item.img = "";
     return item;
   }
 
-  // ---------- PDP guards ----------
+  // PDP guards (Amazon/Walmart/Zara)
   function isAmazonPDP(link) {
     try {
       const { hostname, pathname } = new URL(link);
@@ -75,10 +84,10 @@
     if (L.includes(".amazon.com"))  return isAmazonPDP(link);
     if (L.includes(".walmart.com")) return isWalmartPDP(link);
     if (L.includes(".zara.com"))    return isZaraPDP(link);
-    return true; // Shopbop/eBay fine
+    return true;
   }
 
-  // ---------- messages ----------
+  // ---------------- messages ----------------
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
       if (msg?.action === "PING") {
@@ -95,35 +104,55 @@
           try { sendResponse({ ok: true, ignored: true, reason: "noise" }); } catch {}
           return;
         }
-        // 2) PDP guards (Amazon/Walmart/Zara)
+        // 2) PDP guards
         if (!passesPDPGuards(item.link)) {
           console.log("[UnifiedCart] blocked by PDP guard:", item.link);
           try { sendResponse({ ok: true, ignored: true, reason: "guard" }); } catch {}
           return;
         }
 
-        // 3) save + broadcast
-        chrome.storage.sync.get({ cart: [] }, ({ cart }) => {
-          let items = Array.isArray(cart) ? cart : [];
-          const keyId   = str(item.id);
-          const keyLink = str(item.link);
-          items = items.filter(it => str(it.id) !== keyId && str(it.link) !== keyLink);
-          items.push(item);
+        // 3) OPTIMISTIC update (instant)
+        const keyId   = str(item.id);
+        const keyLink = str(item.link);
+        CART = CART.filter(it => str(it.id) !== keyId && str(it.link) !== keyLink);
+        CART.push(item);
 
-          chrome.storage.sync.set({ cart: items }, () => {
-            // Instant UI update for popup
+        // 3a) instant popup refresh
+        safeRuntimeSendMessage({ action: "CART_UPDATED", items: CART, added: item, count: CART.length });
+
+        // 3b) toast near toolbar (content script handles pos)
+        const tabId = sender?.tab?.id;
+        if (Number.isInteger(tabId) && tabId >= 0) {
+          safeTabsSendMessage(tabId, { action: "SHOW_TOAST", text: "Gotcha!", pos: "top-right" }, { frameId: 0 });
+        }
+
+        // 3c) flash a ✓ badge
+        try {
+          chrome.action.setBadgeBackgroundColor({ color: "#058E3F" });
+          chrome.action.setBadgeText({ text: "✓" });
+          setTimeout(() => chrome.action.setBadgeText({ text: "" }), 1400);
+        } catch {}
+
+        // 4) persist in the background (non-blocking)
+        chrome.storage.sync.set({ cart: CART }, () => {
+          // optional: second broadcast if you want to ensure popup reflects any final dedupe
+          // safeRuntimeSendMessage({ action: "CART_UPDATED", items: CART, added: item, count: CART.length });
+
+          if (ENABLE_NOTIFICATIONS) {
             try {
-              chrome.runtime.sendMessage({ action: "CART_UPDATED", items, added: item, count: items.length });
-            } catch (e) {
-              // If popup is closed or context is gone, ignore.
-            }
-
-            notifyAdded(item);
-            try { sendResponse({ ok: true, saved: true, count: items.length }); } catch {}
-          });
+              chrome.notifications?.create?.({
+                type: "basic",
+                iconUrl: chrome.runtime.getURL("icons/icon48.png"),
+                title: "Item Added",
+                message: `${item.title || "Item"} added to your unified cart.`,
+                silent: true,
+              }, () => void chrome.runtime?.lastError);
+            } catch {}
+          }
         });
 
-        return true; // async
+        try { sendResponse({ ok: true, saved: true, count: CART.length }); } catch {}
+        return true; // async response
       }
     } catch (e) {
       console.error("[UnifiedCart] background error:", e);
@@ -131,7 +160,7 @@
     }
   });
 
-  // Optional: webRequest assist (Amazon/eBay)
+  // ---------------- Optional: webRequest assist (Amazon/eBay) ----------------
   try {
     if (chrome.webRequest?.onBeforeRequest?.addListener) {
       const recent = new Map();
@@ -148,7 +177,7 @@
           const u = String(details.url || "").toLowerCase();
           if (!/(cart|bag|basket|add|checkout)/.test(u)) return;
           if (!shouldNotify(details.tabId)) return;
-          chrome.tabs.sendMessage(details.tabId, { action: "ADD_TRIGGERED", via: "webRequest", url: details.url }, { frameId: 0 });
+          safeTabsSendMessage(details.tabId, { action: "ADD_TRIGGERED", via: "webRequest", url: details.url }, { frameId: 0 });
         },
         { urls: ["*://*.amazon.com/*", "*://*.ebay.com/*"] }
       );

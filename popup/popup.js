@@ -3,7 +3,6 @@ import { getCart, clearCart, removeItem } from "../utils/storage.js";
 
 const safeText = (v) => (v == null ? "" : String(v));
 
-// Convert a link to a readable site label.
 function siteFromLink(link) {
   try {
     const { hostname } = new URL(link);
@@ -30,21 +29,20 @@ function renderItems(items, itemsContainer) {
       '<div class="empty">No items yet. Add something to your cart and it will appear here.</div>';
     return;
   }
+
   itemsContainer.innerHTML = items
     .map((item) => {
-      const id    = safeText(item.id);
-      const img   = safeText(item.img);
+      const id = safeText(item.id);
+      const img = safeText(item.img);
       const title = safeText(item.title || "Untitled item");
       const brand = safeText(item.brand || "");
       const price = safeText(item.price || "");
-      const link  = safeText(item.link || "#");
-      const site  = link && link !== "#" ? siteFromLink(link) : "View";
+      const link = safeText(item.link || "#");
+      const site = link && link !== "#" ? siteFromLink(link) : "View";
 
-      // Make the whole card a logical link target
       return `
         <div class="item" role="link" tabindex="0"
-             data-id="${id}" data-link="${link}"
-             aria-label="Open on ${site}">
+             data-id="${id}" data-link="${link}" aria-label="Open on ${site}">
           <img src="${img}" alt="${title}" loading="lazy" />
           <div class="details">
             <strong title="${title}">${title}</strong>
@@ -63,10 +61,10 @@ function loadAndRender(itemsContainer) {
 }
 
 function wirePopup() {
-  // Set the logo source from the packaged extension path
+  // Ensure logo path works when packed
   const logoEl = document.querySelector(".brand-logo");
   if (logoEl) {
-    if (chrome?.runtime?.getURL) {
+    if (chrome && chrome.runtime && chrome.runtime.getURL) {
       logoEl.src = chrome.runtime.getURL("icons/alligator_icon.png");
     } else {
       logoEl.src = "../icons/alligator_icon.png"; // dev fallback
@@ -75,33 +73,38 @@ function wirePopup() {
 
   const itemsContainer = document.getElementById("items");
   const clearBtn = document.getElementById("clear-all");
-
   if (!itemsContainer) {
     console.error("[UnifiedCart] Missing #items container in popup.html");
     return;
   }
 
-  // Open helper
   const openLink = (url) => {
     if (!url || url === "#") return;
-    try { window.open(url, "_blank", "noopener"); } catch {}
+    try {
+      window.open(url, "_blank", "noopener");
+    } catch {}
   };
 
   // Delegated click: remove OR open card
   itemsContainer.addEventListener("click", (e) => {
     const removeBtn = e.target.closest(".remove");
     if (removeBtn) {
-      const id = removeBtn.closest(".item")?.dataset.id;
+      const card = removeBtn.closest(".item");
+      const id = card?.dataset.id;
       if (!id) return;
-      removeItem(id).then(() => loadAndRender(itemsContainer));
+      e.stopPropagation();
+      e.preventDefault();
+      // optimistic UI
+      card.remove();
+      // real remove (fallback re-render on error)
+      removeItem(id).catch(() => loadAndRender(itemsContainer));
       return;
     }
-
     // If user clicked the inner <a>, let default behavior run
     if (e.target.closest("a")) return;
 
     const card = e.target.closest(".item");
-    if (card && card.dataset.link) {
+    if (card?.dataset.link) {
       openLink(card.dataset.link);
     }
   });
@@ -110,27 +113,37 @@ function wirePopup() {
   itemsContainer.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     const card = e.target.closest(".item");
-    if (!card || !card.dataset.link) return;
+    if (!card?.dataset.link) return;
     e.preventDefault();
     openLink(card.dataset.link);
   });
 
-  // Clear all
-  clearBtn?.addEventListener("click", () => {
-    clearCart().then(() => loadAndRender(itemsContainer));
-  });
-
-  // Instant refresh when background broadcasts a change
-  chrome.runtime?.onMessage?.addListener?.((msg) => {
-    if (msg?.action === "CART_UPDATED" && Array.isArray(msg.items)) {
-      renderItems(msg.items, itemsContainer);
+  // Clear all — single (optimistic) handler
+  clearBtn?.addEventListener("click", async () => {
+    itemsContainer.innerHTML =
+      '<div class="empty">No items yet. Add something to your cart and it will appear here.</div>';
+    try {
+      await clearCart();
+    } finally {
+      loadAndRender(itemsContainer);
     }
   });
 
-  // Fallback: refresh on storage changes
-  chrome.storage?.onChanged?.addListener?.((changes, area) => {
-    if (area === "sync" && changes.cart) loadAndRender(itemsContainer);
-  });
+  // Live refresh from background (optimistic broadcasts)
+  if (chrome && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.action === "CART_UPDATED" && Array.isArray(msg.items)) {
+        renderItems(msg.items, itemsContainer);
+      }
+    });
+  }
+
+  // Storage fallback (covers changes from other contexts)
+  if (chrome && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "sync" && changes.cart) loadAndRender(itemsContainer);
+    });
+  }
 
   // Initial render
   loadAndRender(itemsContainer);
@@ -142,4 +155,4 @@ if (document.readyState === "loading") {
   wirePopup();
 }
 
-console.log("Unified Cart popup v0.1.9 loaded");
+console.log("Alligator popup v0.2.0 loaded");

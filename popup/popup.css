@@ -180,3 +180,6 @@ header {
   #clear-all:active,
   .remove:active { transform: none; }
 }
+
+.item { cursor: pointer; }
+.item:focus-visible { outline: 2px solid #058E3F; outline-offset: 2px; }

@@ -6,18 +6,16 @@
   const log = (...a) => DEBUG && console.log("[UnifiedCart-Generic]", ...a);
   const HAS_EXT = !!(globalThis.chrome && chrome.runtime && chrome.runtime.id);
 
-  // --------- small helpers ----------
+  // ---------- tiny helpers ----------
   const $    = (s) => document.querySelector(s);
   const $$   = (s) => Array.from(document.querySelectorAll(s));
   const txt  = (s) => ($(s)?.textContent || "").trim();
   const attr = (s,n) => $(s)?.getAttribute(n) || "";
   const first= (a) => Array.isArray(a) ? a[0] : a;
   const token= (s) => (String(s).match(/[$€£]\s?\d[\d.,]+/) || [""])[0];
-  const normT= (t) => (Array.isArray(t) ? t : (t ? [t] : [])).map(v => String(v).toLowerCase());
+  const lower= (v) => (typeof v === "string" ? v : String(v || "")).toLowerCase();
 
-  function absUrl(u) {
-    try { return new URL(u, location.href).toString(); } catch { return u || ""; }
-  }
+  function absUrl(u) { try { return new URL(u, location.href).toString(); } catch { return u || ""; } }
   function pickBestFromSrcset(ss) {
     if (!ss) return "";
     try {
@@ -44,14 +42,15 @@
     return "";
   }
 
-  // --------- JSON sources ----------
-  // 1) JSON-LD Product (most platforms)
+  // ---------- JSON sources ----------
   function findProductNode(node) {
     try {
       if (!node || typeof node !== "object") return null;
-      if (normT(node["@type"]).includes("product")) return node;
-      if (Array.isArray(node)) { for (const x of node) { const hit = findProductNode(x); if (hit) return hit; } }
-      else {
+      const t = node["@type"];
+      if (Array.isArray(t) ? t.map(lower).includes("product") : lower(t) === "product") return node;
+      if (Array.isArray(node)) {
+        for (const x of node) { const hit = findProductNode(x); if (hit) return hit; }
+      } else {
         if (node["@graph"]) { const hit = findProductNode(node["@graph"]); if (hit) return hit; }
         for (const k of Object.keys(node)) { const hit = findProductNode(node[k]); if (hit) return hit; }
       }
@@ -59,8 +58,7 @@
     return null;
   }
   function parseLD() {
-    const scripts = $$('script[type*="ld+json"]');
-    for (const s of scripts) {
+    for (const s of $$('script[type*="ld+json"]')) {
       try {
         const json = JSON.parse((s.textContent || "").trim());
         const prod = findProductNode(json);
@@ -70,7 +68,7 @@
     return null;
   }
 
-  // 2) Shopify Product JSON
+  // Shopify Product JSON (incl. headless via __NEXT_DATA__)
   function parseShopifyProductJSON() {
     const candidates = [
       ...$$('script[type="application/json"][id^="ProductJson-"]'),
@@ -82,7 +80,6 @@
         if (json && (json.variants || json.images || json.title)) return json;
       } catch {}
     }
-    // Some headless themes put data in __NEXT_DATA__
     const next = $('#__NEXT_DATA__');
     if (next) {
       try {
@@ -100,10 +97,8 @@
     return null;
   }
 
-  // 3) Minimal microdata sniff (fallback)
-  function microName() {
-    return txt('[itemprop="name"]') || "";
-  }
+  // ---------- microdata ----------
+  const microName  = () => txt('[itemprop="name"]') || "";
   function microPrice() {
     const el = $('[itemprop="price"]');
     if (!el) return "";
@@ -120,82 +115,179 @@
     return u ? absUrl(u) : "";
   }
 
-  // --------- PDP heuristic ----------
-function looksLikePDP() {
-  // 1) Strong signals
-  if (parseLD()) return true;
-  if (parseShopifyProductJSON()) return true;
+  // ---------- add/buy button detection (strict; avoids variant UI) ----------
+  const POS = /\badd(?:ing)?(?:\s+to)?\s+(?:shopping\s+)?(?:bag|cart)\b|\bbuy now\b|\bpurchase\b/i;
+  const NEG = /\b(add to wish|wishlist|favorites|list|registry|address|payment|card|newsletter)\b/i;
 
-  // 2) OG product type
-  const ogType = attr('meta[property="og:type"]','content') || "";
-  if (/product/i.test(ogType)) return true;
+  function isVariantUI(node) {
+    if (!node || node.nodeType !== 1) return false;
+    const tag  = node.tagName;
+    if (tag === "SELECT" || tag === "OPTION") return true;
+    const role = lower(node.getAttribute("role"));
+    if (role === "listbox" || role === "option" || role === "radiogroup" || role === "radio") return true;
 
-  // 3) Platform cues (forms/buttons that exist only on PDPs)
-  // Shopify
-  if ($('form[action*="/cart/add"]') || $('[name="add"]') || $('[data-add-to-cart]')) return true;
-  if ($('input[name="id"]') && ($('[type="submit"][name="add"]') || $('[data-product-form]'))) return true;
+    const cls  = lower(node.className);
+    const name = lower(node.getAttribute("name"));
+    const id   = lower(node.id);
+    const dti  = lower(node.getAttribute("data-testid"));
+    const dha  = lower(node.getAttribute("data-action"));
 
-  // WooCommerce
-  if (document.querySelector("form.cart") ||
-      document.querySelector("button.single_add_to_cart_button") ||
-      document.querySelector('[name="add-to-cart"]')) return true;
+    // Common size/variant cues (incl. SFCC/Demandware)
+    if (/\b(size|sizes|swatch|variant|variation|colour|color|fit)\b/.test(cls)) return true;
+    if (/\b(size|variant|swatch|colour|color|fit)\b/.test(name)) return true;
+    if (/\b(size|variant|swatch|colour|color|fit)\b/.test(id)) return true;
+    if (/^dwvar_/.test(name) || /^dwopt/.test(name)) return true; // SFCC option fields
+    if (/attribute|option|selector/.test(cls) && /size|color|colour/.test(cls)) return true;
+    if (/select/.test(dha) && /variant|size|color|colour/.test(dha)) return true;
+    if (/size/.test(dti) && /(option|selector|swatch)/.test(dti)) return true;
 
-  // BigCommerce
-  if (document.querySelector('form[action*="/cart.php"]') ||
-      document.querySelector('#form-action-addToCart') ||
-      document.querySelector('[data-button-state][data-add-to-cart]')) return true;
-
-  // Magento 2
-  if (document.querySelector('form#product_addtocart_form') ||
-      document.querySelector('#product-addtocart-button') ||
-      document.querySelector('[data-role="tocart"]')) return true;
-
-  // Salesforce Commerce Cloud
-  if (document.querySelector('form[name="add-to-cart"]') ||
-      document.querySelector('[data-action="add-to-cart"]') ||
-      document.querySelector('button.add-to-cart')) return true;
-
-  // PrestaShop
-  if (document.querySelector('[data-button-action="add-to-cart"]')) return true;
-
-  // Squarespace
-  if (document.querySelector('.sqs-add-to-cart-button') ||
-      document.querySelector('.ProductItem-addToCart')) return true;
-
-  // Wix
-  if (document.querySelector('button[data-hook="add-to-cart"]')) return true;
-
-  // 4) Title + price token + non-pixel image
-  const hasH1 = !!$("h1");
-  if (!hasH1) return false;
-  const hasPrice = $$("span,div,p,strong,b").some(el => /[$€£]\s?\d/.test(el.textContent || ""));
-  if (!hasPrice) return false;
-  const img = $("picture img, img");
-  const src = img?.getAttribute("src") || img?.src || "";
-  if (!src || looksLikePixel(src)) return false;
-
-  // 5) Exclusions — but allow Shopify /collections/.../products/... PDPs
-  const path = location.pathname.toLowerCase();
-
-  // Treat these as “product-ish” paths
-  const isProductPath =
-    /\/products?\//.test(path) ||              // Shopify
-    /\/p\//.test(path) ||                      // many headless
-    /\/dp\//.test(path) ||                     // Amazon-style
-    /\/(item|items|sku|prod|goods|shop)\//.test(path) ||
-    /-p\d+(?:\.html|$)/.test(path);            // Zara-style slugs
-
-  // Only apply exclusions if it doesn't look like a product path
-  if (!isProductPath) {
-    if (/(^|\/)(cart|checkout|shopping-?bag)(\/|$)/.test(path)) return false;
-    if (/(^|\/)(wishlist|account|login|register)(\/|$)/.test(path)) return false;
-    if (/(^|\/)(collection|collections|category|categories|catalog)(\/|$)/.test(path)) return false;
+    return false;
   }
 
-  return true;
-}
+  const BUTTONISH_SEL = [
+    "button",
+    'input[type="submit"]',
+    'input[type="button"]',
+    "[role='button']",
+    "a[role='button']",
+    // common platforms
+    "[data-action='add-to-cart']",
+    "[data-button-action='add-to-cart']",
+    "[data-add-to-cart]",
+    "[data-hook='add-to-cart']",
+    "#product-addtocart-button",
+    "[data-role='tocart']",
+    // looser, for SSENSE & friends
+    "[name='add']",
+    "[id='add-to-bag']",
+    "[id='add-to-cart']",
+    "[data-testid*='add']",
+    "[data-test*='add']",
+    "[data-qa*='add']"
+  ].join(",");
 
-  // --------- field extractors ----------
+  function looksLikeAdd(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const s = [
+      el.innerText || el.textContent || "",
+      el.getAttribute?.("aria-label") || "",
+      el.getAttribute?.("data-testid") || "",
+      el.getAttribute?.("id") || "",
+      el.getAttribute?.("name") || "",
+      el.getAttribute?.("class") || "",
+      el.getAttribute?.("data-action") || "",
+      el.getAttribute?.("data-hook") || "",
+      el.getAttribute?.("data-role") || ""
+    ].join(" ").toLowerCase();
+
+    if (s.includes("adding")) return false;
+    if (NEG.test(s)) return false;
+    if (POS.test(s)) return true;
+
+    // platform hints
+    if (/\badd-to-cart\b|\bproduct-form__submit\b|\bshopify-payment-button\b/.test(s)) return true;     // Shopify
+    if (/\bsingle_add_to_cart_button\b|\badd_to_cart_button\b|\bwoocommerce\b/.test(s)) return true;    // Woo
+    if (/\bform-action-addToCart\b|\bdata-add-to-cart\b/.test(s)) return true;                          // BigCommerce
+    if (/\bproduct-addtocart-button\b|\btocart\b/.test(s)) return true;                                 // Magento
+    if (/\badd-to-cart\b/.test(s) || /cart-addproduct/.test(s) || /\bpid\b/.test(s)) return true;       // SFCC
+    if (/\bsqs-add-to-cart-button\b|\bProductItem-addToCart\b/.test(s)) return true;                    // Squarespace
+    if (/\badd-to-cart\b/.test(el.getAttribute?.("data-hook") || "")) return true;                      // Wix-ish
+    return false;
+  }
+
+  function closestActionEl(start) {
+    let el = start && start.nodeType === 1 ? start : start?.parentElement || null;
+    for (let i = 0; i < 10 && el; i++) {
+      if (isVariantUI(el)) return null;                        // inside size/swatch UI — bail
+      if (el.matches?.(BUTTONISH_SEL) || looksLikeAdd(el)) {
+        const disabled = el.hasAttribute?.("disabled") || lower(el.getAttribute?.("aria-disabled")) === "true";
+        if (!disabled) return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  function isAddClick(evt) {
+    if (evt.type === "click" && evt.button !== 0) return false; // left clicks only
+    if (evt.type === "keydown" && evt.key !== "Enter" && evt.key !== " ") return false;
+    const actionEl = closestActionEl(evt.target);
+    return !!actionEl && looksLikeAdd(actionEl);
+  }
+
+  // ---------- PDP heuristic ----------
+  function looksLikePDP() {
+    if (parseLD()) return true;
+    if (parseShopifyProductJSON()) return true;
+
+    const ogType = attr('meta[property="og:type"]','content') || "";
+    if (/product/i.test(ogType)) return true;
+
+    // Shopify
+    if ($('form[action*="/cart/add"]') || $('[name="add"]') || $('[data-add-to-cart]')) return true;
+    if ($('input[name="id"]') && ($('[type="submit"][name="add"]') || $('[data-product-form]'))) return true;
+
+    // WooCommerce
+    if (document.querySelector("form.cart") ||
+        document.querySelector("button.single_add_to_cart_button") ||
+        document.querySelector('[name="add-to-cart"]')) return true;
+
+    // BigCommerce
+    if (document.querySelector('form[action*="/cart.php"]') ||
+        document.querySelector('#form-action-addToCart') ||
+        document.querySelector('[data-button-state][data-add-to-cart]')) return true;
+
+    // Magento 2
+    if (document.querySelector('form#product_addtocart_form') ||
+        document.querySelector('#product-addtocart-button') ||
+        document.querySelector('[data-role="tocart"]')) return true;
+
+    // SFCC / Demandware (DWR/others)
+    if (document.querySelector('form[name="add-to-cart"]') ||
+        document.querySelector('[data-action="add-to-cart"]') ||
+        document.querySelector('button.add-to-cart') ||
+        document.querySelector('form[action*="Cart-AddProduct"]') ||
+        document.querySelector('form[id*="addtocart"]') ||
+        document.querySelector('input[name="pid"]')) return true;
+
+    // PrestaShop
+    if (document.querySelector('[data-button-action="add-to-cart"]')) return true;
+
+    // Squarespace
+    if (document.querySelector('.sqs-add-to-cart-button') ||
+        document.querySelector('.ProductItem-addToCart')) return true;
+
+    // Wix
+    if (document.querySelector('button[data-hook="add-to-cart"]')) return true;
+
+    // Sanity: title + price + image
+    const hasH1 = !!$("h1");
+    if (!hasH1) return false;
+    const hasPrice = $$("span,div,p,strong,b").some(el => /[$€£]\s?\d/.test(el.textContent || ""));
+    if (!hasPrice) return false;
+    const img = $("picture img, img");
+    const src = img?.getAttribute("src") || img?.src || "";
+    if (!src || looksLikePixel(src)) return false;
+
+    // Path hints
+    const path = location.pathname.toLowerCase();
+    const isProductPath =
+      /\/products?\//.test(path) ||   // Shopify
+      /\/product\//.test(path)   ||   // SFCC & headless (DWR)
+      /\/p\//.test(path)        ||
+      /\/dp\//.test(path)       ||
+      /\/(item|items|sku|prod|goods|shop)\//.test(path) ||
+      /-p\d+(?:\.html|$)/.test(path); // Zara-like
+
+    if (!isProductPath) {
+      if (/(^|\/)(cart|checkout|shopping-?bag)(\/|$)/.test(path)) return false;
+      if (/(^|\/)(wishlist|account|login|register)(\/|$)/.test(path)) return false;
+      if (/(^|\/)(collection|collections|category|categories|catalog)(\/|$)/.test(path)) return false;
+    }
+    return true;
+  }
+
+  // ---------- field extractors ----------
   function extractTitle() {
     const og = attr('meta[property="og:title"]','content');
     if (og) return og;
@@ -219,11 +311,9 @@ function looksLikePDP() {
   }
 
   function extractImage() {
-    // 1) OG image
     const og = attr('meta[property="og:image"]','content') || attr('meta[property="og:image:secure_url"]','content');
     if (og && !looksLikePixel(og)) return absUrl(og);
 
-    // 2) JSON-LD image
     const ld = parseLD();
     if (ld?.image) {
       const v = first(ld.image);
@@ -231,19 +321,16 @@ function looksLikePDP() {
       if (url && !looksLikePixel(url)) return absUrl(url);
     }
 
-    // 3) Shopify product JSON
     const sj = parseShopifyProductJSON();
-    if (sj?.images && sj.images.length) {
+    if (sj?.images?.length) {
       const v = first(sj.images);
       const url = (typeof v === "string") ? v : v?.src || v?.url || "";
       if (url && !looksLikePixel(url)) return absUrl(url);
     }
 
-    // 4) microdata
     const mi = microImage();
     if (mi && !looksLikePixel(mi)) return mi;
 
-    // 5) <picture/img>
     const imgEl = $("picture img") || $("img");
     if (imgEl) {
       const ss  = imgEl.getAttribute("srcset");
@@ -253,7 +340,6 @@ function looksLikePDP() {
       if (src  && !looksLikePixel(src))  return src;
     }
 
-    // 6) <source srcset=...>
     const source = $("picture source[srcset]");
     if (source) {
       const ss2 = source.getAttribute("srcset");
@@ -261,22 +347,24 @@ function looksLikePDP() {
       if (best2 && !looksLikePixel(best2)) return best2;
     }
 
-    // 7) lazy attrs
     const lazyImg = $("img[data-src], img[data-original], img[data-lazy], img[data-srcset]");
     if (lazyImg) {
       const lazySrcset = lazyImg.getAttribute("data-srcset");
       const bestL = pickBestFromSrcset(lazySrcset);
       if (bestL && !looksLikePixel(bestL)) return bestL;
-      const lazySrc = absUrl(lazyImg.getAttribute("data-src") || lazyImg.getAttribute("data-original") || lazyImg.getAttribute("data-lazy"));
+      const lazySrc = absUrl(
+        lazyImg.getAttribute("data-src") ||
+        lazyImg.getAttribute("data-original") ||
+        lazyImg.getAttribute("data-lazy")
+      );
       if (lazySrc && !looksLikePixel(lazySrc)) return lazySrc;
     }
 
-    // 8) preload hints
-    const preload = $$('link[rel="preload"][as="image"]').map(l => absUrl(l.getAttribute("href") || l.href))
+    const preload = $$('link[rel="preload"][as="image"]')
+      .map(l => absUrl(l.getAttribute("href") || l.href))
       .find(href => href && !looksLikePixel(href));
     if (preload) return preload;
 
-    // 9) twitter:image
     const tw = attr('meta[name="twitter:image"]','content');
     if (tw && !looksLikePixel(tw)) return absUrl(tw);
 
@@ -284,7 +372,6 @@ function looksLikePDP() {
   }
 
   function extractPrice() {
-    // JSON-LD first
     const ld = parseLD();
     if (ld?.offers) {
       const offers = Array.isArray(ld.offers) ? ld.offers : [ld.offers];
@@ -298,9 +385,8 @@ function looksLikePDP() {
       }
     }
 
-    // Shopify product JSON
     const sj = parseShopifyProductJSON();
-    if (sj && sj.variants && sj.variants.length) {
+    if (sj?.variants?.length) {
       const v0 = sj.variants[0];
       if (typeof v0.price === "number") return centsToCurrency(v0.price, sj.currency || "USD");
       if (typeof v0.price === "string") {
@@ -311,12 +397,11 @@ function looksLikePDP() {
       }
       if (typeof v0.compare_at_price === "number") return centsToCurrency(v0.compare_at_price, sj.currency || "USD");
       if (typeof v0.compare_at_price === "string") {
-        const n = Number(v0.compare_at_price);
-        if (Number.isFinite(n)) return `$ ${n.toFixed(2)}`;
+        const n2 = Number(v0.compare_at_price);
+        if (Number.isFinite(n2)) return `$ ${n2.toFixed(2)}`;
       }
     }
 
-    // Microdata/meta price tags
     const mp = microPrice() ||
                attr('meta[itemprop="price"]','content') ||
                attr('meta[property="product:price:amount"]','content') ||
@@ -327,7 +412,6 @@ function looksLikePDP() {
       return Number.isFinite(n) ? `$ ${n.toFixed(2)}` : token(mp);
     }
 
-    // Visible price (avoid per-unit/compare info)
     const cand = $$('[class*="price"], [data-testid*="price"], [itemprop*="price"], span, div')
       .map(el => el.textContent && el.textContent.trim())
       .filter(Boolean)
@@ -336,10 +420,11 @@ function looksLikePDP() {
     return cand ? token(cand) : "";
   }
 
+  // ---------- item builder ----------
   function buildItem() {
     const ld = parseLD();
     const sj = parseShopifyProductJSON();
-    const sku = ld?.sku || ld?.mpn || sj?.id || sj?.product_id || "";
+    const sku = (ld && (ld.sku || ld.mpn)) || (sj && (sj.id || sj.product_id)) || "";
     return {
       id: String(sku || location.href),
       title: extractTitle(),
@@ -350,27 +435,25 @@ function looksLikePDP() {
     };
   }
 
-  // --------- send logic ----------
+  // ---------- send logic ----------
   function sendItemSafe(item) {
     if (!HAS_EXT) { log("context invalidated — refresh page"); return; }
     try {
       chrome.runtime.sendMessage({ action: "ADD_ITEM", item }, () => {
         if (chrome.runtime?.lastError) log("sendMessage lastError", chrome.runtime.lastError.message);
       });
-    } catch (e) {
-      log("sendMessage exception", e);
-    }
+    } catch (e) { log("sendMessage exception", e); }
   }
 
-  // Dual-shot (quick on pointerdown, settled after DOM updates)
+  // Dual-shot
   let sentQuick=false, sentSettled=false, lastKey="", lastAt=0;
   const debounce = (k,ms)=>{ const now=Date.now(); if(k===lastKey && now-lastAt<ms) return false; lastKey=k; lastAt=now; return true; };
 
-  function settleThenScrape(ms=900){
+  function settleThenScrape(ms = 900){
     return new Promise((resolve)=>{
       let done=false; const initial=buildItem();
       if (initial.price || initial.img){ done=true; return resolve(initial); }
-      const timer=setTimeout(()=>{ if(!done){ done=true; obs.disconnect(); resolve(buildItem()); }}, ms);
+      const timer=setTimeout(()=>{ if(!done){ done=true; obs?.disconnect?.(); resolve(buildItem()); }}, ms);
       const obs=new MutationObserver(()=>{
         if(done) return; const item=buildItem();
         if(item.price || item.img){ clearTimeout(timer); done=true; obs.disconnect(); resolve(item); }
@@ -379,23 +462,79 @@ function looksLikePDP() {
     });
   }
 
-  function sendQuick(){ 
+  function sendQuick(){
     if(!looksLikePDP() || sentQuick) return;
     if(!debounce(location.href,200)) return;
-    const item=buildItem(); if(!item.title) return;
-    log("ADD_ITEM quick", item); sendItemSafe(item); sentQuick=true;
+    const item=buildItem();
+    if(!item.title) return; // allow quick with title; settled fills details
+    log("ADD_ITEM quick", item);
+    sendItemSafe(item);
+    sentQuick=true;
   }
+
   async function sendSettled(){
     if(!looksLikePDP() || sentSettled) return;
-    const item=await settleThenScrape(1000);
+    const item=await settleThenScrape();
     if(!item.title) return;
-    log("ADD_ITEM settled", item); sendItemSafe(item); sentSettled=true;
+    log("ADD_ITEM settled", item);
+    sendItemSafe(item);
+    sentSettled=true;
   }
 
-  // --------- button detection (tight + platform classes) ----------
-  const POS=/\badd to (bag|cart)\b|\bbuy now\b/i;
-  const NEG=/\b(add to wish|wishlist|favorites|list|registry|address|payment|card|newsletter)\b/i;
+  // ---------- wire events ----------
+  // Quick only on actual *click* or keyboard activation of a real button-ish control
+  document.addEventListener("click", (e) => { if (isAddClick(e)) sendQuick(); }, true);
+  ["click","submit","pointerup","touchend","keydown"].forEach(t => {
+    document.addEventListener(t, (e) => { if (isAddClick(e)) setTimeout(sendSettled, 200); }, true);
+  });
 
-  function looksLikeAdd(node){
-    if(!node||node.nodeType!==1) return false;
-    const s=[ node.textContent||"", node.getAttribute?.("aria-label")||"", node.getAttribute?.("data-testid")||"", node.getAttribute?.("id")||"", node.getAttribute?.("name")||"", node.getAtt
+  // Optional: honor background nudges (Amazon/eBay webRequest)
+  chrome.runtime?.onMessage?.addListener?.((msg)=>{
+    if (msg?.action === "ADD_TRIGGERED" && looksLikePDP()){
+      setTimeout(sendSettled, 200);
+    }
+  });
+
+  // SPA URL change watcher — reset flags only
+  let lastHref = location.href;
+  function resetFlags(){ sentQuick=false; sentSettled=false; lastKey=""; lastAt=0; }
+  function onUrlMaybeChanged(){ if (location.href !== lastHref) { lastHref = location.href; resetFlags(); } }
+  (function watchUrlChanges(){
+    const _ps = history.pushState, _rs = history.replaceState;
+    history.pushState = function(...a){ const r = _ps.apply(this,a); onUrlMaybeChanged(); return r; };
+    history.replaceState = function(...a){ const r = _rs.apply(this,a); onUrlMaybeChanged(); return r; };
+    window.addEventListener("popstate", onUrlMaybeChanged);
+    window.addEventListener("hashchange", onUrlMaybeChanged);
+    setInterval(onUrlMaybeChanged, 1000);
+  })();
+
+  // Debug helper
+  window.__UC_GENERIC_DEBUG = () => {
+    const ld = parseLD();
+    const sj = parseShopifyProductJSON();
+    const ogImg = attr('meta[property="og:image"]','content') || attr('meta[property="og:image:secure_url"]','content');
+    const img = document.querySelector("picture img, img");
+    const imgSrc = img?.getAttribute("src") || "";
+    const imgSrcset = img?.getAttribute("srcset") || "";
+    const source = document.querySelector("picture source[srcset]");
+    const sourceSrcset = source?.getAttribute("srcset") || "";
+    const picked = extractImage();
+    const price = extractPrice();
+    const out = {
+      href: location.href,
+      pdp: looksLikePDP(),
+      ldPresent: !!ld,
+      shopifyJson: !!sj,
+      title: extractTitle(),
+      brand: extractBrand(),
+      price,
+      ogImg,
+      imgSrc, imgSrcset, sourceSrcset,
+      picked
+    };
+    console.log("[UnifiedCart-Generic DEBUG]", out);
+    return out;
+  };
+
+  log("loaded", { href: location.href, pdp: looksLikePDP() });
+})();
