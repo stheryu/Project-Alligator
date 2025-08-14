@@ -5,7 +5,6 @@
   const DEBUG = true;
   const log = (...a) => DEBUG && console.log("[UnifiedCart-Amazon]", ...a);
 
-  // Is the extension context alive? (avoids errors after you reload the extension)
   const HAS_EXT = !!(globalThis.chrome && chrome.runtime && chrome.runtime.id);
 
   // ---------- Safe send with storage fallback ----------
