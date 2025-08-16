@@ -1,23 +1,41 @@
 // popup/popup.js
 import { getCart, clearCart, removeItem } from "../utils/storage.js";
 
+const hasChrome = !!(globalThis.chrome && chrome.runtime);
 const safeText = (v) => (v == null ? "" : String(v));
+const MODE_KEY = "shoppingMode";
 
+// ---- Shopping mode helpers (persist + reflect) ----
+function getMode() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.sync.get({ [MODE_KEY]: true }, (o) => resolve(!!o[MODE_KEY]));
+    } catch {
+      resolve(true);
+    }
+  });
+}
+function setMode(on) {
+  return new Promise((resolve) => {
+    try { chrome.storage.sync.set({ [MODE_KEY]: !!on }, resolve); }
+    catch { resolve(); }
+  });
+}
+function reflectMode(btn, on) {
+  if (!btn) return;
+  btn.setAttribute("aria-pressed", String(!!on));
+  btn.title = `Shopping mode: ${on ? "On" : "Off"}`;
+  btn.classList.toggle("is-off", !on);
+}
+
+// Site name from link
 function siteFromLink(link) {
   try {
     const { hostname } = new URL(link);
     const h = hostname.replace(/^www\./i, "");
-    if (h.endsWith(".com")) {
-      const parts = h.split(".");
-      const base = parts[parts.length - 2] || parts[0];
-      return base.charAt(0).toUpperCase() + base.slice(1);
-    }
     const parts = h.split(".");
-    if (parts.length >= 2) {
-      const base = parts[parts.length - 2];
-      return base.charAt(0).toUpperCase() + base.slice(1);
-    }
-    return h.charAt(0).toUpperCase() + h.slice(1);
+    const base = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
+    return base.charAt(0).toUpperCase() + base.slice(1);
   } catch {
     return "View";
   }
@@ -25,20 +43,19 @@ function siteFromLink(link) {
 
 function renderItems(items, itemsContainer) {
   if (!items || items.length === 0) {
-    itemsContainer.innerHTML =
-      '<div class="empty">No items yet. Add something to your cart and it will appear here.</div>';
+    itemsContainer.innerHTML = '<div class="empty">No items yet.</div>';
     return;
   }
 
   itemsContainer.innerHTML = items
     .map((item) => {
-      const id = safeText(item.id);
-      const img = safeText(item.img);
+      const id    = safeText(item.id);
+      const img   = safeText(item.img);
       const title = safeText(item.title || "Untitled item");
       const brand = safeText(item.brand || "");
       const price = safeText(item.price || "");
-      const link = safeText(item.link || "#");
-      const site = link && link !== "#" ? siteFromLink(link) : "View";
+      const link  = safeText(item.link || "#");
+      const site  = link && link !== "#" ? siteFromLink(link) : "View";
 
       return `
         <div class="item" role="link" tabindex="0"
@@ -56,81 +73,95 @@ function renderItems(items, itemsContainer) {
     .join("");
 }
 
-function loadAndRender(itemsContainer) {
-  getCart().then((items) => renderItems(items, itemsContainer));
+async function loadAndRender(itemsContainer) {
+  const items = await getCart();
+  renderItems(items, itemsContainer);
 }
 
 function wirePopup() {
-  // Ensure logo path works when packed
+  // Logo path
   const logoEl = document.querySelector(".brand-logo");
   if (logoEl) {
-    if (chrome && chrome.runtime && chrome.runtime.getURL) {
-      logoEl.src = chrome.runtime.getURL("icons/alligator_icon.png");
-    } else {
-      logoEl.src = "../icons/alligator_icon.png"; // dev fallback
+    try {
+      logoEl.src = hasChrome && chrome.runtime.getURL
+        ? chrome.runtime.getURL("icons/alligator_icon.png")
+        : "../icons/alligator_icon.png";
+    } catch {
+      logoEl.src = "../icons/alligator_icon.png";
     }
   }
 
   const itemsContainer = document.getElementById("items");
   const clearBtn = document.getElementById("clear-all");
+  const toggleBtn = document.getElementById("shopping-toggle");
   if (!itemsContainer) {
     console.error("[UnifiedCart] Missing #items container in popup.html");
     return;
   }
 
+  // ---- Initialize Shopping Mode toggle ----
+  (async () => {
+    const on = await getMode();
+    reflectMode(toggleBtn, on);
+  })();
+
+  toggleBtn?.addEventListener("click", async () => {
+    const currentlyOn = toggleBtn.getAttribute("aria-pressed") === "true";
+    const next = !currentlyOn;
+    reflectMode(toggleBtn, next);
+    await setMode(next);
+
+    // Optional: nudge background (not strictly needed, storage change propagates)
+    try { chrome.runtime.sendMessage({ action: "SHOPPING_MODE_CHANGED", enabled: next }); } catch {}
+  });
+
   const openLink = (url) => {
     if (!url || url === "#") return;
-    try {
-      window.open(url, "_blank", "noopener");
-    } catch {}
+    try { window.open(url, "_blank", "noopener"); } catch {}
   };
 
   // Delegated click: remove OR open card
   itemsContainer.addEventListener("click", (e) => {
-    const removeBtn = e.target.closest(".remove");
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+
+    const removeBtn = target.closest(".remove");
     if (removeBtn) {
       const card = removeBtn.closest(".item");
       const id = card?.dataset.id;
       if (!id) return;
       e.stopPropagation();
       e.preventDefault();
-      // optimistic UI
       card.remove();
-      // real remove (fallback re-render on error)
       removeItem(id).catch(() => loadAndRender(itemsContainer));
       return;
     }
-    // If user clicked the inner <a>, let default behavior run
-    if (e.target.closest("a")) return;
 
-    const card = e.target.closest(".item");
-    if (card?.dataset.link) {
-      openLink(card.dataset.link);
-    }
+    if (target.closest("a")) return; // let <a> work normally
+
+    const card = target.closest(".item");
+    if (card?.dataset.link) openLink(card.dataset.link);
   });
 
-  // Keyboard access: Enter/Space on focused card opens link
+  // Keyboard access
   itemsContainer.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
-    const card = e.target.closest(".item");
+    const card = (e.target instanceof Element) ? e.target.closest(".item") : null;
     if (!card?.dataset.link) return;
     e.preventDefault();
     openLink(card.dataset.link);
   });
 
-  // Clear all — single (optimistic) handler
+  // Clear all
   clearBtn?.addEventListener("click", async () => {
     itemsContainer.innerHTML =
       '<div class="empty">No items yet. Add something to your cart and it will appear here.</div>';
-    try {
-      await clearCart();
-    } finally {
-      loadAndRender(itemsContainer);
-    }
+    try { await clearCart(); }
+    finally { await loadAndRender(itemsContainer); }
   });
 
-  // Live refresh from background (optimistic broadcasts)
-  if (chrome && chrome.runtime && chrome.runtime.onMessage) {
+  // Live refresh from background
+  if (hasChrome && chrome.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.action === "CART_UPDATED" && Array.isArray(msg.items)) {
         renderItems(msg.items, itemsContainer);
@@ -138,10 +169,14 @@ function wirePopup() {
     });
   }
 
-  // Storage fallback (covers changes from other contexts)
-  if (chrome && chrome.storage && chrome.storage.onChanged) {
+  // Storage fallback
+  if (hasChrome && chrome.storage?.onChanged) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "sync" && changes.cart) loadAndRender(itemsContainer);
+      // If you want the button to react to mode changes made elsewhere while popup is open:
+      if (area === "sync" && "shoppingMode" in changes) {
+        reflectMode(toggleBtn, !!changes.shoppingMode.newValue);
+      }
     });
   }
 

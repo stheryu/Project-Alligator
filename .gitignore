@@ -1,0 +1,8 @@
+.DS_Store
+.vscode/
+.idea/
+dist/
+build/
+*.zip
+*.crx
+node_modules/

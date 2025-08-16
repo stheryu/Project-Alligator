@@ -3,18 +3,21 @@
   if (window.top !== window) return;
 
   const DEBUG = true;
-  const log = (...a) => DEBUG && console.log("[UnifiedCart-Bloomies]", ...a);
+  const log = (...a) => DEBUG && console.log("[UnifiedCart-Bloomingdales]", ...a);
   const HAS_EXT = !!(globalThis.chrome && chrome.runtime && chrome.runtime.id);
 
+  // UI-click fallback is OFF by default to avoid swatch false positives.
+  const ENABLE_UI_TRIGGER = false;
+
   // ---- tiny helpers ----
-  const $ = (s) => document.querySelector(s);
+  const $  = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
-  const txt = (s) => ($(s)?.textContent || "").trim();
-  const attr = (s, n) => $(s)?.getAttribute(n) || "";
-  const first = (a) => (Array.isArray(a) ? a[0] : a);
-  const lower = (v) => (typeof v === "string" ? v : String(v || "")).toLowerCase();
-  const token = (s) => (String(s).match(/[$€£]\s?\d[\d.,]+/) || [""])[0];
-  const looksLikePixel = (u = "") => {
+  const txt  = (s) => ($(s)?.textContent || "").trim();
+  const attr = (s,n) => $(s)?.getAttribute(n) || "";
+  const first= (a) => Array.isArray(a) ? a[0] : a;
+  const lower= (v) => (typeof v === "string" ? v : String(v || "")).toLowerCase();
+  const token= (s) => (String(s).match(/[$€£]\s?\d[\d.,]+/) || [""])[0];
+  const looksLikePixel = (u="") => {
     const x = String(u).toLowerCase();
     return !x || x.startsWith("data:") || x.endsWith(".svg") || /pixel|1x1|spacer|beacon/.test(x);
   };
@@ -47,53 +50,36 @@
   // ---- PDP heuristic (Bloomingdale’s) ----
   function isPDP() {
     try {
-      const ld = parseLD();
-      if (ld) return true;
-
-      // Bloomingdale's PDP URLs typically include /shop/product/
+      if (parseLD()) return true;
+      const ogType = (attr('meta[property="og:type"]','content') || "").toLowerCase();
+      if (ogType === "product") return true;
       const path = location.pathname.toLowerCase();
       const hasProductPath = /\/shop\/product\//.test(path);
-
-      // Strong DOM hints
-      const ogType = (attr('meta[property="og:type"]', 'content') || "").toLowerCase() === "product";
       const hasTitle = !!$("h1, [data-testid*='product-title']");
-      const hasAdd = !!closestAddButton(document.body);
-
-      return ogType || ld || (hasProductPath && hasTitle && hasAdd);
+      return hasProductPath && hasTitle;
     } catch { return false; }
   }
 
   // ---- field extractors ----
   function extractTitle() {
-    return (
-      attr('meta[property="og:title"]', 'content') ||
-      txt("h1") ||
-      document.title
-    );
+    return attr('meta[property="og:title"]', 'content') || txt("h1") || document.title;
   }
   function extractBrand() {
     const ld = parseLD();
     if (ld?.brand) return typeof ld.brand === "string" ? ld.brand : (ld.brand.name || "");
-    // many pages have brand near title/breadcrumb
-    return (
-      txt('[data-testid*="brand"], [class*="Brand"] a') ||
-      attr('meta[property="og:site_name"]', 'content') ||
-      "Bloomingdale's"
-    );
+    return txt('[data-testid*="brand"], [class*="Brand"] a') || attr('meta[property="og:site_name"]','content') || "Bloomingdale's";
   }
   function extractImage() {
-    const og = attr('meta[property="og:image"]', 'content');
+    const og = attr('meta[property="og:image"]','content');
     if (og && !looksLikePixel(og)) return og;
-
     const ld = parseLD();
     if (ld?.image) {
       const v = first(Array.isArray(ld.image) ? ld.image : [ld.image]);
       if (typeof v === "string") return v;
       if (v && typeof v === "object" && v.url) return v.url;
     }
-
-    const img = document.querySelector("picture img, img");
-    return img?.getAttribute("src") || img?.src || "";
+    const el = document.querySelector("picture img, img");
+    return el?.getAttribute("src") || el?.src || "";
   }
   function extractPrice() {
     const ld = parseLD();
@@ -109,14 +95,13 @@
       }
     }
     const mp =
-      attr('meta[itemprop="price"]', 'content') ||
-      attr('meta[property="product:price:amount"]', 'content') ||
-      attr('meta[property="og:price:amount"]', 'content');
+      attr('meta[itemprop="price"]','content') ||
+      attr('meta[property="product:price:amount"]','content') ||
+      attr('meta[property="og:price:amount"]','content');
     if (mp) {
       const n = Number(mp);
       return Number.isFinite(n) ? `$ ${n.toFixed(2)}` : token(mp);
     }
-    // visible fallback
     const cand = $$('[class*="price"], [data-testid*="price"], span, div')
       .map((el) => el.textContent && el.textContent.trim())
       .filter(Boolean)
@@ -147,19 +132,16 @@
     } catch (e) { log("sendMessage exception", e); }
   }
 
-  // ---- add button targeting (tight) ----
-  // Try a set of Bloomingdale’s-specific selectors first, then a textual fallback.
+  // ---- strict add button selectors ----
   const ADD_SEL = [
     'button#add-to-bag',
     'button[name="addToBag"]',
+    '[data-testid="add-to-bag"]',
     '[data-testid*="add-to-bag"]',
-    '[aria-label*="add to bag" i]',
     'button.add-to-bag',
-    'button:has([data-testid*="add-to-bag"])'
+    // fallback: product form submit inside the PDP form
+    'form[action*="add"] button[type="submit"]'
   ].join(",");
-
-  const NEG = /\b(wish(?:list)?|favorites?|registry|newsletter|subscribe|gift\s*card|apply|paypal|apple\s*pay|google\s*pay|klarna|afterpay)\b/i;
-  const POS = /\b(add(?:\s+to)?\s*(?:bag|cart)|buy\s+now|purchase)\b/i;
 
   function isVariantUI(node) {
     if (!node || node.nodeType !== 1) return false;
@@ -169,52 +151,35 @@
     if (role === "listbox" || role === "option" || role === "radiogroup" || role === "radio") return true;
     const cls = lower(node.className);
     const name = lower(node.getAttribute?.("name"));
-    const id = lower(node.id);
+    const id   = lower(node.id);
     if (/\b(size|sizes|swatch|variant|variation|colour|color|fit)\b/.test(cls)) return true;
-    if (/\b(size|variant|swatch|colour|color|fit)\b/.test(name)) return true;
-    if (/\b(size|variant|swatch|colour|color|fit)\b/.test(id)) return true;
+    if (/\b(size|variant|swatch|variation|colour|color|fit)\b/.test(name)) return true;
+    if (/\b(size|variant|swatch|variation|colour|color|fit)\b/.test(id)) return true;
     return false;
-  }
-
-  function looksLikeAdd(el) {
-    if (!el || el.nodeType !== 1) return false;
-
-    if (el.matches?.(ADD_SEL)) return true;
-
-    const s = [
-      el.innerText || el.textContent || "",
-      el.getAttribute?.("aria-label") || "",
-      el.getAttribute?.("data-testid") || "",
-      el.getAttribute?.("id") || "",
-      el.getAttribute?.("name") || "",
-      el.getAttribute?.("class") || ""
-    ].join(" ").toLowerCase();
-
-    if (s.includes("adding")) return false;
-    if (NEG.test(s)) return false;
-    return POS.test(s);
   }
 
   function closestAddButton(start) {
     let el = start && start.nodeType === 1 ? start : start?.parentElement || null;
-    for (let i = 0; i < 10 && el; i++) {
-      if (isVariantUI(el)) return null; // ignore size/swatch UI
-      if (looksLikeAdd(el)) return el;
+    for (let i = 0; i < 8 && el; i++) {
+      if (isVariantUI(el)) return null;   // ignore size/color controls
+      if (el.matches?.(ADD_SEL)) return el;
       el = el.parentElement;
     }
     return null;
   }
 
-  // ---- dual-shot ----
-  let sentQuick = false, sentSettled = false, lastAt = 0, lastKey = "";
-  const debounce = (key, ms) => { const now = Date.now(); if (key===lastKey && now-lastAt<ms) return false; lastKey=key; lastAt=now; return true; };
+  // ---- dual-shot on *real* add button ----
+  let sentQuick=false, sentSettled=false, lastKey="", lastAt=0;
+  const debounce=(k,ms)=>{const now=Date.now();if(k===lastKey&&now-lastAt<ms)return false;lastKey=k;lastAt=now;return true;};
+
   function settleThenScrape(ms=900){
     return new Promise((resolve)=>{
       let done=false; const initial=buildItem();
       if (initial.price || initial.img){ done=true; return resolve(initial); }
-      const timer=setTimeout(()=>{ if(!done){ done=true; obs.disconnect(); resolve(buildItem()); }}, ms);
+      const timer=setTimeout(()=>{ if(!done){ done=true; obs?.disconnect?.(); resolve(buildItem()); }}, ms);
       const obs=new MutationObserver(()=>{
-        if(done) return; const item=buildItem();
+        if(done) return;
+        const item=buildItem();
         if(item.price || item.img){ clearTimeout(timer); done=true; obs.disconnect(); resolve(item); }
       });
       obs.observe(document.documentElement,{childList:true,subtree:true,attributes:true});
@@ -222,38 +187,31 @@
   }
 
   function sendQuick(){
-    if (!isPDP() || sentQuick) return;
-    if (!debounce(location.href,200)) return;
-    const item = buildItem();
-    if (!item.title) return;
+    if(!isPDP() || sentQuick) return;
+    if(!debounce(location.href,200)) return;
+    const item=buildItem();
+    if(!item.title) return;
     log("ADD_ITEM quick", item);
     sendItemSafe(item);
-    sentQuick = true;
+    sentQuick=true;
   }
   async function sendSettled(){
-    if (!isPDP() || sentSettled) return;
-    const item = await settleThenScrape();
-    if (!item.title) return;
+    if(!isPDP() || sentSettled) return;
+    const item=await settleThenScrape();
+    if(!item.title) return;
     log("ADD_ITEM settled", item);
     sendItemSafe(item);
-    sentSettled = true;
+    sentSettled=true;
   }
 
-  // ---- wire clicks/keys (only when real add button is involved) ----
-  document.addEventListener("click", (e) => {
-    const btn = closestAddButton(e.target);
-    if (!btn) return;
-    sendQuick();
-    setTimeout(sendSettled, 200);
-  }, true);
+  // ---- wire/unwire behind a switch ----
+  function onClick(e){ const btn = closestAddButton(e.target); if (!btn) return; if (btn.disabled || btn.getAttribute("aria-disabled")==="true") return; sendQuick(); setTimeout(sendSettled, 200); }
+  function onKey(e){ if (e.key !== "Enter" && e.key !== " ") return; const btn = closestAddButton(e.target); if (!btn) return; sendQuick(); setTimeout(sendSettled, 200); }
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" && e.key !== " ") return;
-    const btn = closestAddButton(e.target);
-    if (!btn) return;
-    sendQuick();
-    setTimeout(sendSettled, 200);
-  }, true);
+  if (ENABLE_UI_TRIGGER) {
+    document.addEventListener("click", onClick, true);
+    document.addEventListener("keydown", onKey, true);
+  }
 
-  log("loaded", { href: location.href, isPDP: isPDP() });
+  log("loaded", { href: location.href, isPDP: isPDP(), uiTrigger: ENABLE_UI_TRIGGER });
 })();

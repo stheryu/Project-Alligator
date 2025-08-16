@@ -1,9 +1,30 @@
 {
   "manifest_version": 3,
   "name": "Unified Shopping Cart",
-  "version": "0.1.26",
+  "version": "0.1.25",
   "description": "Aggregate shopping carts across sites into one dashboard.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "notifications", "alarms", "webRequest"],
+  "host_permissions": [
+    "*://*.amazon.com/*",
+    "*://*.ebay.com/*",
+    "*://*.walmart.com/*",
+    "*://*.zara.com/*",
+    "*://*.shopbop.com/*",
+    "*://*.net-a-porter.com/*",
+    "*://*.bergdorfgoodman.com/*",
+    "*://*.ssense.com/*",
+    "*://*.dwr.com/*"
+  ],
+
+  "icons": {
+    "16":  "icons/icon16.png",
+    "24":  "icons/icon24.png",
+    "32":  "icons/icon32.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png",
+    "256": "icons/icon256.png",
+    "512": "icons/icon512.png"
+  },
 
   "background": { "service_worker": "background.js" },
 
@@ -16,55 +37,20 @@
     }
   },
 
-  "icons": {
-    "16": "icons/icon16.png",
-    "24": "icons/icon24.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
-
-  "web_accessible_resources": [
-    {
-      "resources": ["inpage/pageHook.inpage.js"],
-      "matches": ["*://*/*"]
-    }
-  ],
-
   "content_scripts": [
     {
-      "matches": ["*://*/*"],
-      "exclude_matches": [
-        "*://*/cart*",
-        "*://*/checkout*",
-        "*://*/wishlist*",
-        "*://*/account*",
-        "*://*/login*",
-        "*://*/register*",
-        "*://*/search*",
-        "*://*/help*",
-        "*://*/privacy*",
-        "*://*/terms*",
-        "*://*/sitemap*"
-      ],
-      "js": ["content-scripts/pageHook.js"],
-      "run_at": "document_start",
-      "all_frames": false
-    },
-
-    {
-      "matches": ["*://*.amazon.com/*"],
+      "matches": ["*://*.shopbop.com/*"],
       "js": [
-        "content-scripts/amazonAddListener.js",
+        "content-scripts/shopbopAddListener.js",
         "content-scripts/toastListener.js"
       ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": ["*://*.shopbop.com/*"],
+      "matches": ["*://*.amazon.com/*"],
       "js": [
-        "content-scripts/shopbopAddListener.js",
+        "content-scripts/amazonAddListener.js",
         "content-scripts/toastListener.js"
       ],
       "run_at": "document_idle",
@@ -89,15 +75,6 @@
       "all_frames": true
     },
     {
-      "matches": ["*://*.net-a-porter.com/*"],
-      "js": [
-        "content-scripts/netaporterAddListener.js",
-        "content-scripts/toastListener.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": false
-    },
-    {
       "matches": ["*://*.ebay.com/*"],
       "js": [
         "content-scripts/genericAddListener.js",
@@ -107,24 +84,32 @@
       "all_frames": true
     },
     {
-  "matches": ["*://*.bergdorfgoodman.com/*"],
-  "js": [
-    "content-scripts/bergdorfAddListener.js",
-    "content-scripts/toastListener.js"
-  ],
-  "run_at": "document_idle",
-  "all_frames": true
-},
-{
-  "matches": ["*://*.bloomingdales.com/*"],
-  "js": [
-    "content-scripts/bloomingdalesAddListener.js",
-    "content-scripts/toastListener.js"
-  ],
-  "run_at": "document_idle",
-  "all_frames": true
-},
-
+      "matches": ["*://*.net-a-porter.com/*"],
+      "js": [
+        "content-scripts/netaporterAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+     {
+      "matches": ["*://*.dwr.com/*"],
+      "js": [
+        "content-scripts/dwrAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.bergdorfgoodman.com/*"],
+      "js": [
+        "content-scripts/bergdorfAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
     {
       "matches": ["*://*/*"],
       "exclude_matches": [
@@ -135,17 +120,25 @@
         "*://*/login*",
         "*://*/register*",
         "*://*/search*",
+        "*://*/category*",
+        "*://*/categories*",
+        "*://*/collection*",
+        "*://*/collections*",
+        "*://*/catalog*",
         "*://*/help*",
         "*://*/privacy*",
         "*://*/terms*",
         "*://*/sitemap*",
 
+        
         "*://*.amazon.com/*",
+        "*://*.ebay.com/*",
         "*://*.walmart.com/*",
         "*://*.zara.com/*",
         "*://*.shopbop.com/*",
         "*://*.net-a-porter.com/*",
-        "*://*.ebay.com/*"
+        "*://*.dwr.com/*",
+        "*://*.bergdorfgoodman.com/*"
       ],
       "js": [
         "content-scripts/genericAddListener.js",

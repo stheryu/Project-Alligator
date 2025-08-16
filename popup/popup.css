@@ -10,10 +10,17 @@
   --remove-bg: #D3D3D3;
   --remove-bg-hover: #C8C8C8;
   --remove-bg-active: #BEBEBE;
+
+  /* new */
+  --divider: #E6E6E6;
+  --toggle-off-bg: #F5F5F5;
+  --toggle-off-border: #BEBEBE;
+  --toggle-knob-off: #6E6E6E;
 }
 
+/* Chrome popup width */
 body {
-  width: 380px; /* Chrome popup width */
+  width: 380px;
   margin: 0;
   padding: 10px;
   font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
@@ -25,7 +32,7 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 0; /* divider will handle spacing */
 }
 
 .brand {
@@ -68,6 +75,67 @@ header {
   font-display: swap;
 }
 
+/* ---------- Toggle (Shopping Mode) ---------- */
+/* HTML: <button id="shopping-toggle" class="uc-toggle" aria-pressed="true"><span class="knob"></span><span class="tick">âœ“</span></button> */
+
+.uc-toggle {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  border: 2px solid var(--toggle-off-border);
+  background: var(--toggle-off-bg);
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  transition: background .18s ease, border-color .18s ease;
+}
+
+.uc-toggle .knob {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--toggle-knob-off);
+  margin-left: 4px;
+  transition: transform .18s ease, background .18s ease;
+}
+
+.uc-toggle .tick {
+  position: absolute;
+  right: 8px; top: 3px;
+  font-size: 14px; line-height: 1;
+  color: #fff;
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+
+/* ON state (aria-pressed="true") */
+.uc-toggle[aria-pressed="true"] {
+  background: var(--green);
+  border-color: var(--green);
+}
+.uc-toggle[aria-pressed="true"] .knob {
+  transform: translateX(18px);
+  background: #fff;
+}
+.uc-toggle[aria-pressed="true"] .tick { opacity: 1; }
+
+.uc-toggle:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+/* ---------- Divider + actions row ---------- */
+.uc-divider {
+  height: 1px;
+  background: var(--divider);
+  margin: 8px 0 6px;
+}
+
+.uc-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
 /* ---------- Controls ---------- */
 #clear-all {
   background: var(--pill);
@@ -84,7 +152,7 @@ header {
 #clear-all:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 
 /* ---------- List ---------- */
-.items {
+.items, #items {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -99,9 +167,7 @@ header {
   border: 1px solid #e5e5e5;
   border-radius: 8px;
   background: #fff;
-
-  /* make the whole card feel clickable */
-  cursor: pointer;
+  cursor: pointer; /* make the whole card feel clickable */
 }
 .item:hover { background: #fafafa; }
 
@@ -146,7 +212,7 @@ header {
   text-overflow: ellipsis;
 }
 
-/* ---------- Remove button (subtle grey with white ×) ---------- */
+/* ---------- Remove button (subtle grey with white Ã—) ---------- */
 .remove {
   display: inline-flex;
   align-items: center;
@@ -155,13 +221,13 @@ header {
   padding: 0;
   border-radius: 50%;
   border: 1px solid #BEBEBE;
-  background: var(--remove-bg);          /* #D3D3D3 */
-  color: #fff;                           /* white × */
+  background: var(--remove-bg);
+  color: #fff;
   font-size: 16px;
-  line-height: 1;                        /* keep the × centered */
+  line-height: 1;
   box-shadow: 0 1px 2px rgba(0,0,0,.08);
 }
-.remove:hover  { background: var(--remove-bg-hover); }  /* #C8C8C8 */
+.remove:hover  { background: var(--remove-bg-hover); }
 .remove:active { background: var(--remove-bg-active); transform: scale(0.96); }
 .remove:focus-visible { outline: 2px solid #bbb; outline-offset: 2px; }
 
@@ -181,5 +247,4 @@ header {
   .remove:active { transform: none; }
 }
 
-.item { cursor: pointer; }
-.item:focus-visible { outline: 2px solid #058E3F; outline-offset: 2px; }
+.item:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }

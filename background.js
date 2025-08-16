@@ -1,8 +1,8 @@
 // background.js — Unified Cart (MV3)
-// v0.2.0 (optimistic updates + safe messaging)
+// v0.2.1 (optimistic updates + safe messaging + duplicate/throttle guards + shopping mode)
 
 (() => {
-  const VERSION = "0.2.0";
+  const VERSION = "0.2.1";
   console.log(`[UnifiedCart] SW v${VERSION} starting`);
 
   const ENABLE_NOTIFICATIONS = false;
@@ -13,7 +13,6 @@
   chrome.storage.sync.get({ cart: [] }, ({ cart }) => {
     CART = Array.isArray(cart) ? cart : [];
   });
-  // Keep CART in sync if something else modifies storage (e.g., popup remove/clear)
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "sync" && changes.cart) {
       const v = changes.cart.newValue;
@@ -21,7 +20,18 @@
     }
   });
 
-  // ---------------- Safe message helpers (avoid “receiving end” errors) ----------------
+  // --- Shopping mode flag (persisted in storage) ---
+  let SHOPPING_MODE = true;
+  chrome.storage.sync.get({ shoppingMode: true }, ({ shoppingMode }) => {
+    SHOPPING_MODE = !!shoppingMode;
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "sync" && changes.shoppingMode) {
+      SHOPPING_MODE = !!changes.shoppingMode.newValue;
+    }
+  });
+
+  // ---------------- Safe message helpers ----------------
   function safeRuntimeSendMessage(msg) {
     try {
       chrome.runtime.sendMessage(msg, () => void chrome.runtime?.lastError);
@@ -87,6 +97,20 @@
     return true;
   }
 
+  // ---------------- duplicate/toast throttles ----------------
+  const RECENT_WINDOW_MS = 1500;
+  const recentKeyTime = new Map();     // key -> ts (dedupe by item)
+  const recentToastByTab = new Map();  // tabId -> ts (throttle toasts per tab)
+
+  const now = () => Date.now();
+  function seenRecently(map, key, ms = RECENT_WINDOW_MS) {
+    const t = now();
+    const last = map.get(key) || 0;
+    if (t - last < ms) return true;
+    map.set(key, t);
+    return false;
+  }
+
   // ---------------- messages ----------------
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
@@ -96,6 +120,12 @@
       }
 
       if (msg?.action === "ADD_ITEM" && msg.item) {
+        // Shopping mode gate
+        if (!SHOPPING_MODE) {
+          try { sendResponse({ ok: true, ignored: true, reason: "mode_off" }); } catch {}
+          return;
+        }
+
         const item = sanitizeItem(msg.item);
 
         // 1) noise filter
@@ -114,30 +144,34 @@
         // 3) OPTIMISTIC update (instant)
         const keyId   = str(item.id);
         const keyLink = str(item.link);
-        CART = CART.filter(it => str(it.id) !== keyId && str(it.link) !== keyLink);
+        const key     = (keyId || keyLink).toLowerCase();
+
+        // Deduplicate in-memory list by id/link
+        CART = CART.filter(it =>
+          str(it.id).toLowerCase()   !== keyId.toLowerCase() &&
+          str(it.link).toLowerCase() !== keyLink.toLowerCase()
+        );
         CART.push(item);
 
         // 3a) instant popup refresh
         safeRuntimeSendMessage({ action: "CART_UPDATED", items: CART, added: item, count: CART.length });
 
-        // 3b) toast near toolbar (content script handles pos)
+        // 3b) toast near toolbar — throttle per tab and per item
         const tabId = sender?.tab?.id;
-        if (Number.isInteger(tabId) && tabId >= 0) {
+        const shouldToast = Number.isInteger(tabId) &&
+                            !seenRecently(recentKeyTime, key) &&
+                            !seenRecently(recentToastByTab, tabId);
+        if (shouldToast) {
           safeTabsSendMessage(tabId, { action: "SHOW_TOAST", text: "Gotcha!", pos: "top-right" }, { frameId: 0 });
+          try {
+            chrome.action.setBadgeBackgroundColor({ color: "#058E3F" });
+            chrome.action.setBadgeText({ text: "✓" });
+            setTimeout(() => chrome.action.setBadgeText({ text: "" }), 1400);
+          } catch {}
         }
-
-        // 3c) flash a ✓ badge
-        try {
-          chrome.action.setBadgeBackgroundColor({ color: "#058E3F" });
-          chrome.action.setBadgeText({ text: "✓" });
-          setTimeout(() => chrome.action.setBadgeText({ text: "" }), 1400);
-        } catch {}
 
         // 4) persist in the background (non-blocking)
         chrome.storage.sync.set({ cart: CART }, () => {
-          // optional: second broadcast if you want to ensure popup reflects any final dedupe
-          // safeRuntimeSendMessage({ action: "CART_UPDATED", items: CART, added: item, count: CART.length });
-
           if (ENABLE_NOTIFICATIONS) {
             try {
               chrome.notifications?.create?.({
@@ -152,7 +186,7 @@
         });
 
         try { sendResponse({ ok: true, saved: true, count: CART.length }); } catch {}
-        return true; // async response
+        return true; // async
       }
     } catch (e) {
       console.error("[UnifiedCart] background error:", e);
@@ -165,10 +199,10 @@
     if (chrome.webRequest?.onBeforeRequest?.addListener) {
       const recent = new Map();
       const shouldNotify = (tabId, ms = 1200) => {
-        const now = Date.now();
+        const t = now();
         const last = recent.get(tabId) || 0;
-        if (now - last < ms) return false;
-        recent.set(tabId, now);
+        if (t - last < ms) return false;
+        recent.set(tabId, t);
         return true;
       };
       chrome.webRequest.onBeforeRequest.addListener(
@@ -186,4 +220,6 @@
   } catch (e) {
     console.error("[UnifiedCart] webRequest listener setup error:", e);
   }
+
+  console.log("[UnifiedCart] SW ready");
 })();
