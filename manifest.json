@@ -5,11 +5,9 @@
   "description": "Aggregate shopping carts across sites into one dashboard.",
   "permissions": ["storage", "notifications", "alarms", "webRequest"],
   "web_accessible_resources": [
-    {
-      "resources": ["Inpage/pageHook.inpage.js"],
-      "matches": ["<all_urls>"]
-    }
-  ],
+  { "resources": ["Inpage/pageHook.inpage.js"], "matches": ["<all_urls>"] },
+  { "resources": ["Inpage/pageHook.hybris.inpage.js"], "matches": ["*://*.zara.com/*", "*://*.mango.com/*"] }
+],
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.ebay.com/*",
@@ -19,7 +17,8 @@
     "*://*.net-a-porter.com/*",
     "*://*.bergdorfgoodman.com/*",
     "*://*.ssense.com/*",
-    "*://*.dwr.com/*"
+    "*://*.dwr.com/*",
+    "*://*.mango.com/*"
   ],
 
   "icons": {
@@ -56,10 +55,11 @@
     {
       "matches": ["*://*.amazon.com/*"],
       "js": [
+        "content-scripts/pageBridge.js",
         "content-scripts/amazonAddListener.js",
         "content-scripts/toastListener.js"
       ],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "all_frames": true
     },
     {
@@ -72,14 +72,15 @@
       "all_frames": false
     },
     {
-      "matches": ["*://*.zara.com/*"],
-      "js": [
-        "content-scripts/zaraAddListener.js",
-        "content-scripts/toastListener.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true
-    },
+  "matches": ["*://*.zara.com/*", "*://*.mango.com/*"],
+  "js": [
+    "content-scripts/pageBridge.hybris.js",
+    "content-scripts/genericAddListener.js",
+    "content-scripts/toastListener.js"
+  ],
+  "run_at": "document_start",
+  "all_frames": true
+},
     {
       "matches": ["*://*.ebay.com/*"],
       "js": [
@@ -101,19 +102,23 @@
      {
       "matches": ["*://*.dwr.com/*"],
       "js": [
+        "content-scripts/pageBridge.js",
+        "content-scripts/genericAddListener.js",
         "content-scripts/dwrAddListener.js",
         "content-scripts/toastListener.js"
       ],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "all_frames": true
     },
     {
       "matches": ["*://*.bergdorfgoodman.com/*"],
       "js": [
+        "content-scripts/pageBridge.js",
+        "content-scripts/genericAddListener.js",
         "content-scripts/bergdorfAddListener.js",
         "content-scripts/toastListener.js"
       ],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "all_frames": true
     },
     {
@@ -126,11 +131,9 @@
         "*://*/login*",
         "*://*/register*",
         "*://*/search*",
+        "*://*/catalog*",
         "*://*/category*",
         "*://*/categories*",
-        "*://*/collection*",
-        "*://*/collections*",
-        "*://*/catalog*",
         "*://*/help*",
         "*://*/privacy*",
         "*://*/terms*",
@@ -147,6 +150,7 @@
         "*://*.bergdorfgoodman.com/*"
       ],
       "js": [
+        "content-scripts/pageBridge.js",
         "content-scripts/genericAddListener.js",
         "content-scripts/toastListener.js"
       ],

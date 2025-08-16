@@ -4,11 +4,35 @@
 
   const DEBUG = true;
   const log = (...a) => DEBUG && console.log("[UnifiedCart-Generic]", ...a);
-  const HAS_EXT = !!(globalThis.chrome && chrome.runtime && chrome.runtime.id);
+
+  // Hosts where the "quick add on click" path is noisy → rely on network nudge only.
+  const DISABLE_QUICK_HOSTS = /(\.|^)(amazon|zara|mango|kith|theoutnet)\.com$/i;
+  const IS_AMAZON = /\bamazon\./i.test(location.hostname);
+
+  // ---- Amazon: require real Add-to-Cart button click before honoring nudges ----
+  const AMZ_ADD_SELECTORS = [
+    "#add-to-cart-button",
+    "#add-to-cart-button-ubb",
+    'input[name="submit.add-to-cart"]',
+    'form[action*="handle-buy-box"] [type="submit"]',
+    "[data-action='add-to-cart']",
+    "[aria-labelledby*='add-to-cart-button']"
+  ].join(",");
+
+  let amzLastAddClickTs = 0;
+  document.addEventListener("click", (e) => {
+    try {
+      if (!IS_AMAZON) return;
+      const btn = e.target?.closest?.(AMZ_ADD_SELECTORS);
+      if (btn) amzLastAddClickTs = Date.now();
+    } catch {}
+  }, true);
+  const amzClickedRecently = (ms = 6000) =>
+    IS_AMAZON && (Date.now() - amzLastAddClickTs) < ms;
 
   // ---------- tiny helpers ----------
-  const $    = (s) => document.querySelector(s);
-  const $$   = (s) => Array.from(document.querySelectorAll(s));
+  const $ = (s) => document.querySelector(s);
+  const $$ = (s) => Array.from(document.querySelectorAll(s));
   const txt  = (s) => ($(s)?.textContent || "").trim();
   const attr = (s,n) => $(s)?.getAttribute(n) || "";
   const first= (a) => Array.isArray(a) ? a[0] : a;
@@ -61,14 +85,13 @@
   }
   function unwireAll(){
     if (!WIRED) return;
-    offAll(); // DOM listeners
+    offAll();
     try { chrome.runtime?.onMessage?.removeListener?.(handleNudge); } catch {}
     resetFlags();
     WIRED = false;
     log("unwired (shopping mode OFF)");
   }
 
-  // read initial mode, react to changes
   try {
     chrome.storage?.sync?.get?.({ shoppingMode: true }, ({ shoppingMode }) => {
       __UC_MODE.enabled = !!shoppingMode;
@@ -162,7 +185,7 @@
     return u ? absUrl(u) : "";
   }
 
-  // ---------- add/buy button detection (strict; avoids variant UI) ----------
+  // ---------- add/buy button detection ----------
   const POS = /\badd(?:ing)?(?:\s+to)?\s+(?:shopping\s+)?(?:bag|cart)\b|\bbuy now\b|\bpurchase\b/i;
   const NEG = /\b(add to wish|wishlist|favorites|list|registry|address|payment|card|newsletter)\b/i;
 
@@ -180,16 +203,14 @@
     const dti  = lower(node.getAttribute?.("data-testid"));
     const dha  = lower(node.getAttribute?.("data-action"));
 
-    // Common size/variant cues (incl. SFCC/Demandware)
     if (/\b(size|sizes|swatch|variant|variation|colour|color|fit)\b/.test(cls)) return true;
     if (/\b(size|variant|swatch|colour|color|fit)\b/.test(name)) return true;
     if (/\b(size|variant|swatch|colour|color|fit)\b/.test(id)) return true;
-    if (/^dwvar_/.test(name) || /^dwopt/.test(name)) return true; // SFCC option fields
+    if (/^dwvar_/.test(name) || /^dwopt/.test(name)) return true;
     if (/attribute|option|selector/.test(cls) && /size|color|colour/.test(cls)) return true;
     if (/select/.test(dha) && /variant|size|color|colour/.test(dha)) return true;
     if (/size/.test(dti) && /(option|selector|swatch)/.test(dti)) return true;
 
-    // data-* attributes that hint variant controls
     for (const a of Array.from(node.attributes || [])) {
       const an = lower(a.name);
       const av = lower(a.value);
@@ -208,14 +229,12 @@
     'input[type="button"]',
     "[role='button']",
     "a[role='button']",
-    // common platforms
     "[data-action='add-to-cart']",
     "[data-button-action='add-to-cart']",
     "[data-add-to-cart]",
     "[data-hook='add-to-cart']",
     "#product-addtocart-button",
     "[data-role='tocart']",
-    // looser, for SSENSE & friends
     "[name='add']",
     "#add-to-bag",
     "#add-to-cart",
@@ -242,21 +261,20 @@
     if (NEG.test(s)) return false;
     if (POS.test(s)) return true;
 
-    // platform hints
-    if (/\badd-to-cart\b|\bproduct-form__submit\b|\bshopify-payment-button\b/.test(s)) return true;     // Shopify
-    if (/\bsingle_add_to_cart_button\b|\badd_to_cart_button\b|\bwoocommerce\b/.test(s)) return true;    // Woo
-    if (/\bform-action-addToCart\b|\bdata-add-to-cart\b/.test(s)) return true;                          // BigCommerce
-    if (/\bproduct-addtocart-button\b|\btocart\b/.test(s)) return true;                                 // Magento
-    if (/\badd-to-cart\b/.test(s) || /cart-addproduct/.test(s) || /\bpid\b/.test(s)) return true;       // SFCC
-    if (/\bsqs-add-to-cart-button\b|\bProductItem-addToCart\b/.test(s)) return true;                    // Squarespace
-    if (/\badd-to-cart\b/.test(el.getAttribute?.("data-hook") || "")) return true;                      // Wix-ish
+    if (/\badd-to-cart\b|\bproduct-form__submit\b|\bshopify-payment-button\b/.test(s)) return true;
+    if (/\bsingle_add_to_cart_button\b|\badd_to_cart_button\b|\bwoocommerce\b/.test(s)) return true;
+    if (/\bform-action-addToCart\b|\bdata-add-to-cart\b/.test(s)) return true;
+    if (/\bproduct-addtocart-button\b|\btocart\b/.test(s)) return true;
+    if (/\badd-to-cart\b/.test(s) || /cart-addproduct/.test(s) || /\bpid\b/.test(s)) return true;
+    if (/\bsqs-add-to-cart-button\b|\bProductItem-addToCart\b/.test(s)) return true;
+    if (/\badd-to-cart\b/.test(el.getAttribute?.("data-hook") || "")) return true;
     return false;
   }
 
   function closestActionEl(start) {
     let el = start && start.nodeType === 1 ? start : start?.parentElement || null;
     for (let i = 0; i < 10 && el; i++) {
-      if (isVariantUI(el)) return null;                        // inside size/swatch UI — bail
+      if (isVariantUI(el)) return null;
       if (el.matches?.(BUTTONISH_SEL) || looksLikeAdd(el)) {
         const disabled = el.hasAttribute?.("disabled") || lower(el.getAttribute?.("aria-disabled")) === "true";
         if (!disabled) return el;
@@ -267,7 +285,7 @@
   }
 
   function isAddClick(evt) {
-    if (evt.type === "click" && evt.button !== 0) return false; // left clicks only
+    if (evt.type === "click" && evt.button !== 0) return false;
     if (evt.type === "keydown" && evt.key !== "Enter" && evt.key !== " ") return false;
     const actionEl = closestActionEl(evt.target);
     return !!actionEl && looksLikeAdd(actionEl);
@@ -281,26 +299,21 @@
     const ogType = attr('meta[property="og:type"]','content') || "";
     if (/product/i.test(ogType)) return true;
 
-    // Shopify
     if ($('form[action*="/cart/add"]') || $('[name="add"]') || $('[data-add-to-cart]')) return true;
     if ($('input[name="id"]') && ($('[type="submit"][name="add"]') || $('[data-product-form]'))) return true;
 
-    // WooCommerce
     if (document.querySelector("form.cart") ||
         document.querySelector("button.single_add_to_cart_button") ||
         document.querySelector('[name="add-to-cart"]')) return true;
 
-    // BigCommerce
     if (document.querySelector('form[action*="/cart.php"]') ||
         document.querySelector('#form-action-addToCart') ||
         document.querySelector('[data-button-state][data-add-to-cart]')) return true;
 
-    // Magento 2
     if (document.querySelector('form#product_addtocart_form') ||
         document.querySelector('#product-addtocart-button') ||
         document.querySelector('[data-role="tocart"]')) return true;
 
-    // SFCC / Demandware (DWR/others)
     if (document.querySelector('form[name="add-to-cart"]') ||
         document.querySelector('[data-action="add-to-cart"]') ||
         document.querySelector('button.add-to-cart') ||
@@ -308,17 +321,13 @@
         document.querySelector('form[id*="addtocart"]') ||
         document.querySelector('input[name="pid"]')) return true;
 
-    // PrestaShop
     if (document.querySelector('[data-button-action="add-to-cart"]')) return true;
 
-    // Squarespace
     if (document.querySelector('.sqs-add-to-cart-button') ||
         document.querySelector('.ProductItem-addToCart')) return true;
 
-    // Wix
     if (document.querySelector('button[data-hook="add-to-cart"]')) return true;
 
-    // Sanity: title + price + image
     const hasH1 = !!$("h1");
     if (!hasH1) return false;
     const hasPrice = $$("span,div,p,strong,b").some(el => /[$€£]\s?\d/.test(el.textContent || ""));
@@ -327,7 +336,6 @@
     const src = img?.getAttribute("src") || img?.src || "";
     if (!src || looksLikePixel(src)) return false;
 
-    // Path hints
     const path = location.pathname.toLowerCase();
     const isProductPath =
       /\/products?\//.test(path) ||
@@ -495,11 +503,9 @@
 
   // ---------- send logic ----------
   function sendItemSafe(item) {
-    if (!HAS_EXT) { log("context invalidated — refresh page"); return; }
     try {
-      chrome.runtime.sendMessage({ action: "ADD_ITEM", item }, () => {
-        if (chrome.runtime?.lastError) log("sendMessage lastError", chrome.runtime.lastError.message);
-      });
+      if (!chrome?.runtime?.id) { log("context invalidated — refresh page"); return; }
+      chrome.runtime.sendMessage({ action: "ADD_ITEM", item }, () => void chrome.runtime?.lastError);
     } catch (e) { log("sendMessage exception", e); }
   }
 
@@ -525,7 +531,7 @@
     if(!looksLikePDP() || sentQuick) return;
     if(!debounce(location.href,200)) return;
     const item=buildItem();
-    if(!item.title) return; // allow quick with title; settled fills details
+    if(!item.title) return;
     log("ADD_ITEM quick", item);
     sendItemSafe(item);
     sentQuick=true;
@@ -542,9 +548,27 @@
   }
 
   // --- handlers used by listener manager ---
-  function handleClick(e){ if (!__UC_MODE.enabled) return; if (isAddClick(e)) sendQuick(); }
-  function handleAfter(e){ if (!__UC_MODE.enabled) return; if (isAddClick(e)) setTimeout(sendSettled, 200); }
-  function handleNudge(msg){ if (!__UC_MODE.enabled) return; if (msg?.action === "ADD_TRIGGERED" && looksLikePDP()) setTimeout(sendSettled, 200); }
+  function handleClick(e){
+    if (!__UC_MODE.enabled) return;
+    if (DISABLE_QUICK_HOSTS.test(location.hostname)) return; // disable quick path on noisy hosts
+    if (isAddClick(e)) sendQuick();
+  }
+  function handleAfter(e){
+    if (!__UC_MODE.enabled) return;
+    if (DISABLE_QUICK_HOSTS.test(location.hostname)) return; // disable after-click settled path on noisy hosts
+    if (isAddClick(e)) setTimeout(sendSettled, 200);
+  }
+  function handleNudge(msg){
+    if (!__UC_MODE.enabled) return;
+    if (msg?.action !== "ADD_TRIGGERED" || !looksLikePDP()) return;
+
+    // AMAZON GATE: only honor nudge if user clicked a real Add CTA recently
+    if (IS_AMAZON && !amzClickedRecently()) {
+      log("ignore nudge (amazon, no recent add click)");
+      return;
+    }
+    setTimeout(sendSettled, 200);
+  }
 
   // ---------- SPA URL change watcher — reset flags only ----------
   let lastHref = location.href;

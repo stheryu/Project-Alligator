@@ -1,9 +1,12 @@
 // background.js — Unified Cart (MV3)
-// v0.2.1 (optimistic updates + safe messaging + duplicate/throttle guards + shopping mode)
+// v0.3.2  (non-PDP guard for Kith/OUTNET, safe messaging, nudges, tidy throttles)
 
 (() => {
-  const VERSION = "0.2.1";
-  console.log(`[UnifiedCart] SW v${VERSION} starting`);
+  const VERSION = "0.3.2";
+  const DEBUG = false;
+  const log = (...a) => { if (DEBUG) try { console.log("[UnifiedCart]", ...a); } catch {} };
+
+  log(`SW v${VERSION} starting`);
 
   const ENABLE_NOTIFICATIONS = false;
   const str = (x) => (x == null ? "" : String(x));
@@ -33,14 +36,10 @@
 
   // ---------------- Safe message helpers ----------------
   function safeRuntimeSendMessage(msg) {
-    try {
-      chrome.runtime.sendMessage(msg, () => void chrome.runtime?.lastError);
-    } catch (_) {}
+    try { chrome.runtime.sendMessage(msg, () => void chrome.runtime?.lastError); } catch {}
   }
   function safeTabsSendMessage(tabId, msg, opts = {}) {
-    try {
-      chrome.tabs.sendMessage(tabId, msg, opts, () => void chrome.runtime?.lastError);
-    } catch (_) {}
+    try { chrome.tabs.sendMessage(tabId, msg, opts, () => void chrome.runtime?.lastError); } catch {}
   }
 
   // ---------------- tiny helpers ----------------
@@ -66,7 +65,7 @@
     return item;
   }
 
-  // PDP guards (Amazon/Walmart/Zara)
+  // ---------- PDP guards (Amazon/Walmart/Zara only) ----------
   function isAmazonPDP(link) {
     try {
       const { hostname, pathname } = new URL(link);
@@ -97,10 +96,39 @@
     return true;
   }
 
-  // ---------------- duplicate/toast throttles ----------------
+  // ---------- NEW: obvious non-PDP URL filter (Kith/OUTNET & generic) ----------
+  function isLikelyProductUrl(link) {
+    try {
+      const { hostname, pathname } = new URL(String(link || ""));
+      const host = hostname.toLowerCase();
+      const p = pathname.toLowerCase();
+
+      // Shopify: PDPs are /products/... ; ignore pure /collections/... links
+      if (p.includes("/collections/") && !p.includes("/products/")) return false;
+
+      // THE OUTNET (YNAP): /shop/... is a hub; PDPs include /product/...
+      if (/(\.|^)theoutnet\.com$/.test(host)) {
+        if (/\/shop(\/|$)/.test(p) && !/\/product(\/|$)/.test(p)) return false;
+      }
+
+      // Generic: common non-PDP paths unless they also include a product-y token
+      if (/\/(collection|collections|category|categories|catalog|shop)(\/|$)/.test(p)
+          && !/\/(product|products|pdp|item)\b/.test(p)) {
+        return false;
+      }
+
+      return true;
+    } catch {
+      // If parsing fails, don't block on the guard.
+      return true;
+    }
+  }
+
+  // ---------------- duplicate/toast/nudge throttles ----------------
   const RECENT_WINDOW_MS = 1500;
   const recentKeyTime = new Map();     // key -> ts (dedupe by item)
   const recentToastByTab = new Map();  // tabId -> ts (throttle toasts per tab)
+  const recentNudgeByTab = new Map();  // tabId -> ts (throttle nudges per tab)
 
   const now = () => Date.now();
   function seenRecently(map, key, ms = RECENT_WINDOW_MS) {
@@ -109,6 +137,13 @@
     if (t - last < ms) return true;
     map.set(key, t);
     return false;
+  }
+  function shouldNudge(tabId, ms = 1200) {
+    const t = now();
+    const last = recentNudgeByTab.get(tabId) || 0;
+    if (t - last < ms) return false;
+    recentNudgeByTab.set(tabId, t);
+    return true;
   }
 
   // ---------------- messages ----------------
@@ -119,29 +154,51 @@
         return; // sync
       }
 
-      if (msg?.action === "ADD_ITEM" && msg.item) {
-        // Shopping mode gate
+      // In-page hook → nudge content script to scrape after AJAX/form add-to-cart
+      if (msg?.action === "PAGE_ADD_EVENT") {
         if (!SHOPPING_MODE) {
           try { sendResponse({ ok: true, ignored: true, reason: "mode_off" }); } catch {}
-          return;
+          return; // sync
+        }
+        const tabId = sender?.tab?.id;
+        log("PAGE_ADD_EVENT", { tabId, via: msg.via, url: msg.url, method: msg.method });
+        if (Number.isInteger(tabId) && shouldNudge(tabId)) {
+          safeTabsSendMessage(tabId, { action: "ADD_TRIGGERED", via: msg.via || "inpage", url: msg.url }, { frameId: 0 });
+        }
+        try { sendResponse({ ok: true }); } catch {}
+        return; // sync
+      }
+
+      if (msg?.action === "ADD_ITEM" && msg.item) {
+        if (!SHOPPING_MODE) {
+          try { sendResponse({ ok: true, ignored: true, reason: "mode_off" }); } catch {}
+          return; // sync
         }
 
         const item = sanitizeItem(msg.item);
 
         // 1) noise filter
         if (looksLikeNoise(item)) {
-          console.log("[UnifiedCart] ignored noise item", item);
+          log("ignored noise item", item);
           try { sendResponse({ ok: true, ignored: true, reason: "noise" }); } catch {}
-          return;
-        }
-        // 2) PDP guards
-        if (!passesPDPGuards(item.link)) {
-          console.log("[UnifiedCart] blocked by PDP guard:", item.link);
-          try { sendResponse({ ok: true, ignored: true, reason: "guard" }); } catch {}
-          return;
+          return; // sync
         }
 
-        // 3) OPTIMISTIC update (instant)
+        // 1b) obvious non-PDP pages (e.g., Kith collections, OUTNET shop hubs)
+        if (item.link && !isLikelyProductUrl(item.link)) {
+          log("ignored non-PDP url", item.link);
+          try { sendResponse({ ok: true, ignored: true, reason: "non_pdp" }); } catch {}
+          return; // sync
+        }
+
+        // 2) PDP guards for specific hosts
+        if (!passesPDPGuards(item.link)) {
+          log("blocked by PDP guard:", item.link);
+          try { sendResponse({ ok: true, ignored: true, reason: "guard" }); } catch {}
+          return; // sync
+        }
+
+        // 3) OPTIMISTIC update
         const keyId   = str(item.id);
         const keyLink = str(item.link);
         const key     = (keyId || keyLink).toLowerCase();
@@ -170,7 +227,7 @@
           } catch {}
         }
 
-        // 4) persist in the background (non-blocking)
+        // 4) persist (fire-and-forget; no sendResponse dependency)
         chrome.storage.sync.set({ cart: CART }, () => {
           if (ENABLE_NOTIFICATIONS) {
             try {
@@ -186,7 +243,7 @@
         });
 
         try { sendResponse({ ok: true, saved: true, count: CART.length }); } catch {}
-        return true; // async
+        return; // sync (we already responded)
       }
     } catch (e) {
       console.error("[UnifiedCart] background error:", e);
@@ -194,7 +251,7 @@
     }
   });
 
-  // ---------------- Optional: webRequest assist (Amazon/eBay) ----------------
+  // ---------------- Optional: webRequest assist (eBay only, strict) ----------------
   try {
     if (chrome.webRequest?.onBeforeRequest?.addListener) {
       const recent = new Map();
@@ -205,21 +262,29 @@
         recent.set(tabId, t);
         return true;
       };
+
       chrome.webRequest.onBeforeRequest.addListener(
         (details) => {
-          if (details.tabId < 0) return;
-          const u = String(details.url || "").toLowerCase();
-          if (!/(cart|bag|basket|add|checkout)/.test(u)) return;
-          if (!shouldNotify(details.tabId)) return;
-          safeTabsSendMessage(details.tabId, { action: "ADD_TRIGGERED", via: "webRequest", url: details.url }, { frameId: 0 });
+          try {
+            if (details.tabId < 0) return;
+            if ((details.method || "").toUpperCase() !== "POST") return;
+            const u = String(details.url || "");
+            // Keep this tight to avoid false positives
+            const hit = /\/(cart\/(add|ajax|addtocart)|AddToCart|shoppingcart|basket\/add)\b/i.test(u);
+            if (!hit) return;
+            if (!shouldNotify(details.tabId)) return;
+            log("webRequest assist (eBay) hit:", u);
+            safeTabsSendMessage(details.tabId, { action: "ADD_TRIGGERED", via: "webRequest", url: details.url }, { frameId: 0 });
+          } catch {}
         },
-        { urls: ["*://*.amazon.com/*", "*://*.ebay.com/*"] }
+        { urls: ["*://*.ebay.com/*"] }
       );
-      console.log("[UnifiedCart] webRequest assist active (Amazon/eBay)");
+
+      log("webRequest assist active (eBay)");
     }
   } catch (e) {
     console.error("[UnifiedCart] webRequest listener setup error:", e);
   }
 
-  console.log("[UnifiedCart] SW ready");
+  log("SW ready");
 })();

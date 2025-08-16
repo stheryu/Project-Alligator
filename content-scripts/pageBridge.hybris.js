@@ -1,24 +1,18 @@
-// content-scripts/pageBridge.js
+// content-scripts/pageBridge.hybris.js
 (() => {
-  if (window.__UC_BRIDGE__) return;
-  window.__UC_BRIDGE__ = true;
+  if (window.__UC_BRIDGE_HYBRIS__) return;
+  window.__UC_BRIDGE_HYBRIS__ = true;
 
   try {
     const s = document.createElement("script");
-    s.src = chrome.runtime.getURL("Inpage/pageHook.inpage.js");
+    s.src = chrome.runtime.getURL("Inpage/pageHook.hybris.inpage.js");
     (document.head || document.documentElement).appendChild(s);
     s.onload = () => s.remove();
   } catch {}
 
+  // swallow benign MV3 lastError + tiny dedupe (same URL spam)
   const LAST = { url: "", t: 0 };
   const WINDOW_MS = 800;
-
-  function sendToBG(payload) {
-    try {
-      if (!chrome?.runtime?.id) return; // extension reloaded / page stale
-      chrome.runtime.sendMessage(payload, () => void chrome.runtime?.lastError);
-    } catch {}
-  }
 
   window.addEventListener("message", (ev) => {
     if (ev.source !== window) return;
@@ -29,11 +23,13 @@
     if (d.url && d.url === LAST.url && now - LAST.t < WINDOW_MS) return;
     LAST.url = d.url || ""; LAST.t = now;
 
-    queueMicrotask(() => sendToBG({
-      action: "PAGE_ADD_EVENT",
-      via: d.via,
-      url: d.url,
-      method: d.method
-    }));
+    try {
+      chrome.runtime.sendMessage({
+        action: "PAGE_ADD_EVENT",
+        via: d.via,
+        url: d.url,
+        method: d.method
+      }, () => void chrome.runtime?.lastError);
+    } catch {}
   }, false);
 })();
