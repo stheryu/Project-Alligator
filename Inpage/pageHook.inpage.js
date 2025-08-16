@@ -1,89 +1,35 @@
-// inpage/pageHook.inpage.js
-// Strict network/form add detection only (no UI fallback).
-
-// TEMP: disable this script without deleting it
 (() => {
-  const DISABLED = true;
-  if (DISABLED) {
-    try { console.debug("[UnifiedCart] <filename>.js disabled"); } catch {}
-    return; // nothing below will run
-  }
+  if (window.__UC_HOOK__) return;
+  window.__UC_HOOK__ = true;
 
-  // --- original code stays below ---
-})();
+  const post = (payload) => {
+    window.postMessage({ source: "UnifiedCartPage", type: "ADD_EVENT", ...payload }, "*");
+  };
 
-(function () {
-  try {
-    // Only explicit "add" endpoints
-    const ADD_URL_RE = new RegExp(
-      [
-        String.raw`\/cart\/add(?:\.(?:js|json))?\b`,          // Shopify
-        String.raw`\/Cart-(?:AddProduct|MiniAddProduct|AddToCart)\b`, // SFCC (e.g., DWR)
-        String.raw`\badd-?to-?(?:cart|bag|basket)\b`,         // Generic wording
-        String.raw`\/api\/(?:cart|basket)\/add\b`             // Common API
-      ].join("|"),
-      "i"
-    );
+  // Intercept fetch
+  const origFetch = window.fetch;
+  window.fetch = async function(...args) {
+    try {
+      const [req, init] = args;
+      const url = String(req?.url || req);
+      if (/\/(cart\/add(\.js|\.json)?|Cart-AddProduct|Cart-MiniAddProduct)/i.test(url)) {
+        const res = await origFetch.apply(this, args);
+        // Let it complete successfully before nudging
+        Promise.resolve().then(() => post({ via: "fetch", url, method: (init?.method || "GET").toUpperCase() }));
+        return res;
+      }
+    } catch {}
+    return origFetch.apply(this, args);
+  };
 
-    const METHOD_OK = (m) => {
-      m = String(m || "GET").toUpperCase();
-      return m === "POST" || m === "PUT" || m === "PATCH";
-    };
-
-    const post = (via, url, method) => {
-      try {
-        window.postMessage(
-          { source: "UnifiedCartPage", type: "ADD_EVENT", via: String(via||""), url: String(url||""), method: String(method||"") },
-          "*"
-        );
-      } catch {}
-    };
-
-    // fetch
-    const _fetch = window.fetch;
-    if (typeof _fetch === "function") {
-      window.fetch = function (input, init) {
-        try {
-          let url = "", method = "GET";
-          if (typeof input === "string") {
-            url = input;
-            method = (init && init.method) || "GET";
-          } else {
-            url = (input && input.url) || "";
-            method = (input && input.method) || (init && init.method) || "GET";
-          }
-          if (ADD_URL_RE.test(String(url)) && METHOD_OK(method)) post("fetch", url, method);
-        } catch {}
-        return _fetch.apply(this, arguments);
-      };
-    }
-
-    // XHR
-    const _open = XMLHttpRequest && XMLHttpRequest.prototype && XMLHttpRequest.prototype.open;
-    if (_open) {
-      XMLHttpRequest.prototype.open = function (method, url) {
-        try {
-          if (ADD_URL_RE.test(String(url)) && METHOD_OK(method)) {
-            this.addEventListener("loadend", () => post("xhr", url, method));
-          }
-        } catch {}
-        return _open.apply(this, arguments);
-      };
-    }
-
-    // Forms
-    document.addEventListener("submit", (ev) => {
-      try {
-        const f = ev && ev.target;
-        if (!f) return;
-        const action = (f.getAttribute && f.getAttribute("action")) || "";
-        const method = (f.getAttribute && f.getAttribute("method")) || f.method || "GET";
-        if (ADD_URL_RE.test(String(action)) && METHOD_OK(method)) post("submit", action, method);
-      } catch {}
-    }, true);
-
-    console.debug("[UnifiedCart] inpage hook active (strict)");
-  } catch (e) {
-    console.debug("[UnifiedCart] inpage hook error:", e);
-  }
+  // Intercept XHR
+  const origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    this.addEventListener("loadend", () => {
+      if (/\/(cart\/add(\.js|\.json)?|Cart-AddProduct|Cart-MiniAddProduct)/i.test(String(url))) {
+        post({ via: "xhr", url: String(url), method: String(method || "GET").toUpperCase() });
+      }
+    });
+    return origOpen.call(this, method, url, ...rest);
+  };
 })();

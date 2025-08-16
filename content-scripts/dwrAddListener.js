@@ -159,4 +159,123 @@
     }
     const mp = attr('meta[itemprop="price"]','content') ||
                attr('meta[property="product:price:amount"]','content') ||
-      
+               attr('meta[property="og:price:amount"]','content');
+    if (mp) {
+      const n = Number(mp);
+      return Number.isFinite(n) ? `$ ${n.toFixed(2)}` : token(mp);
+    }
+    const cand = $$('[class*="price"], [data-testid*="price"], span, div')
+      .map(el => el.textContent && el.textContent.trim())
+      .filter(Boolean)
+      .find(t => /[$€£]\s?\d/.test(t));
+    return cand ? token(cand) : "";
+  }
+
+  // ---------- item + messaging ----------
+  function buildItem() {
+    const ld = parseLD();
+    const sku = ld?.sku || ld?.mpn || "";
+    return {
+      id: sku || location.href,
+      title: extractTitle(),
+      brand: extractBrand(),
+      price: extractPrice(),
+      img: extractImage(),
+      link: location.href
+    };
+  }
+
+  function sendItemSafe(item) {
+    if (!HAS_EXT) return;
+    try {
+      chrome.runtime.sendMessage({ action: "ADD_ITEM", item }, () => void chrome.runtime?.lastError);
+    } catch {}
+  }
+
+  // Debounce duplicates (per page)
+  let lastSentKey = "";
+  let lastSentAt  = 0;
+  const DEDUPE_MS = 900;
+  function shouldSend(key) {
+    const t = Date.now();
+    if (key === lastSentKey && t - lastSentAt < DEDUPE_MS) return false;
+    lastSentKey = key; lastSentAt = t; return true;
+  }
+
+  // Wait a moment for DOM to settle (price/image swap after click/submit)
+  function settleThenScrape(ms = 800) {
+    return new Promise((resolve) => {
+      let done = false;
+      const initial = buildItem();
+      if ((initial.price && initial.img) || initial.title) {
+        // if it already looks good, still wait briefly for potential upgrades
+      }
+      const timer = setTimeout(() => {
+        if (!done) { done = true; obs?.disconnect?.(); resolve(buildItem()); }
+      }, ms);
+      const obs = new MutationObserver(() => {
+        if (done) return;
+        const item = buildItem();
+        if ((item.price && item.img) || item.title) {
+          clearTimeout(timer);
+          done = true; obs.disconnect();
+          resolve(item);
+        }
+      });
+      obs.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+    });
+  }
+
+  async function sendQuickThenSettled() {
+    if (!isPDP()) return;
+    const quick = buildItem();
+    if (!quick.title) return;
+    const key = (quick.id || quick.link || location.href);
+    if (!shouldSend(key)) return;
+
+    // quick optimistic
+    log("ADD_ITEM quick", quick);
+    sendItemSafe(quick);
+
+    // settled
+    try {
+      const settled = await settleThenScrape(900);
+      if (settled && settled.title) {
+        log("ADD_ITEM settled", settled);
+        sendItemSafe(settled);
+      }
+    } catch {}
+  }
+
+  // ---------- UI fallback (tight) ----------
+  // Known SFCC/DWR selectors
+  const ADD_SELECTORS = [
+    'form[action*="Cart-AddProduct"] button[type="submit"]',
+    'button[name="addToCart"]',
+    'button#add-to-cart',
+    '[data-action="add-to-cart"]'
+  ].join(',');
+
+  // Primary signal: Cart-AddProduct form submit
+  document.addEventListener("submit", (e) => {
+    try {
+      const form = e.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      const action = (form.getAttribute("action") || "").toLowerCase();
+      if (!/cart-?addproduct|add-?to-?cart/.test(action)) return;
+      if (!isPDP()) return;
+      sendQuickThenSettled();
+    } catch {}
+  }, true);
+
+  // Backup: explicit click on known add buttons
+  document.addEventListener("click", (e) => {
+    const btn = e.target && (e.target.closest?.(ADD_SELECTORS));
+    if (!btn) return;
+    if (!isPDP()) return;
+    if (btn.disabled || btn.getAttribute("aria-disabled") === "true") return;
+    sendQuickThenSettled();
+  }, true);
+
+  log("loaded", { href: location.href, isPDP: isPDP() });
+})();

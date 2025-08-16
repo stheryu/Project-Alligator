@@ -4,6 +4,12 @@
   "version": "0.1.25",
   "description": "Aggregate shopping carts across sites into one dashboard.",
   "permissions": ["storage", "notifications", "alarms", "webRequest"],
+  "web_accessible_resources": [
+    {
+      "resources": ["Inpage/pageHook.inpage.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.ebay.com/*",
