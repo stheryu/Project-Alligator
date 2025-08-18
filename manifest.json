@@ -5,34 +5,40 @@
   "description": "Aggregate shopping carts across sites into one dashboard.",
   "permissions": ["storage", "notifications", "alarms", "webRequest"],
   "web_accessible_resources": [
-  { "resources": ["Inpage/pageHook.inpage.js"], "matches": ["<all_urls>"] },
-  { "resources": ["Inpage/pageHook.hybris.inpage.js"], "matches": ["*://*.zara.com/*", "*://*.mango.com/*"] }
-],
+    {
+      "resources": ["Inpage/pageHook.inpage.js"],
+      "matches": ["<all_urls>"]
+    },
+    {
+      "resources": ["Inpage/pageHook.hybris.inpage.js"],
+      "matches": ["*://*.zara.com/*", "*://*.mango.com/*", "*://shop.mango.com/*"]
+    }
+  ],
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.ebay.com/*",
     "*://*.walmart.com/*",
     "*://*.zara.com/*",
+    "*://*.zara.net/*",
     "*://*.shopbop.com/*",
     "*://*.net-a-porter.com/*",
     "*://*.bergdorfgoodman.com/*",
     "*://*.ssense.com/*",
     "*://*.dwr.com/*",
-    "*://*.mango.com/*"
+    "*://*.mango.com/*",
+    "*://shop.mango.com/*",
+    "*://*.theoutnet.com/*"
   ],
-
   "icons": {
-    "16":  "icons/icon16.png",
-    "24":  "icons/icon24.png",
-    "32":  "icons/icon32.png",
-    "48":  "icons/icon48.png",
+    "16": "icons/icon16.png",
+    "24": "icons/icon24.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
     "128": "icons/icon128.png",
     "256": "icons/icon256.png",
     "512": "icons/icon512.png"
   },
-
   "background": { "service_worker": "background.js" },
-
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
@@ -41,7 +47,6 @@
       "32": "icons/icon32.png"
     }
   },
-
   "content_scripts": [
     {
       "matches": ["*://*.shopbop.com/*"],
@@ -72,15 +77,24 @@
       "all_frames": false
     },
     {
-  "matches": ["*://*.zara.com/*", "*://*.mango.com/*"],
-  "js": [
-    "content-scripts/pageBridge.hybris.js",
-    "content-scripts/genericAddListener.js",
-    "content-scripts/toastListener.js"
-  ],
-  "run_at": "document_start",
-  "all_frames": true
-},
+      "matches": ["*://*.zara.com/*"],
+      "js": [
+        "content-scripts/pageBridge.hybris.js",
+        "content-scripts/zaraAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://shop.mango.com/*", "*://*.mango.com/*"],
+      "js": [
+        "content-scripts/mangoAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
     {
       "matches": ["*://*.ebay.com/*"],
       "js": [
@@ -99,7 +113,7 @@
       "run_at": "document_idle",
       "all_frames": false
     },
-     {
+    {
       "matches": ["*://*.dwr.com/*"],
       "js": [
         "content-scripts/pageBridge.js",
@@ -122,6 +136,16 @@
       "all_frames": true
     },
     {
+  "matches": ["*://*.theoutnet.com/*"],
+  "js": [
+    "content-scripts/pageBridge.js",
+    "content-scripts/theoutnetAddListener.js",
+    "content-scripts/toastListener.js"
+  ],
+  "run_at": "document_start",
+  "all_frames": true
+},
+    {
       "matches": ["*://*/*"],
       "exclude_matches": [
         "*://*/cart*",
@@ -134,12 +158,13 @@
         "*://*/catalog*",
         "*://*/category*",
         "*://*/categories*",
+        "*://*/collection*",
+        "*://*/collections*",
         "*://*/help*",
         "*://*/privacy*",
         "*://*/terms*",
         "*://*/sitemap*",
 
-        
         "*://*.amazon.com/*",
         "*://*.ebay.com/*",
         "*://*.walmart.com/*",
@@ -147,7 +172,9 @@
         "*://*.shopbop.com/*",
         "*://*.net-a-porter.com/*",
         "*://*.dwr.com/*",
-        "*://*.bergdorfgoodman.com/*"
+        "*://*.bergdorfgoodman.com/*",
+        "*://*.mango.com/*",
+        "*://shop.mango.com/*"
       ],
       "js": [
         "content-scripts/pageBridge.js",
