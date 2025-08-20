@@ -5,8 +5,6 @@ Collect every “Add to Cart” in one place so you can review, compare, and nev
 Demo: https://youtu.be/pWlEJEw95_g
 Contact: https://www.linkedin.com/in/joohyunyu0130/
 
-⸻
-
 What it does
 	•	Captures title, price, URL, and image the moment you click Add to Cart on supported sites.
 	•	Shopping Mode toggle controls when listeners run.
