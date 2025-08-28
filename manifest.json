@@ -1,9 +1,30 @@
 {
   "manifest_version": 3,
   "name": "Unified Shopping Cart",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "description": "Aggregate shopping carts across sites into one dashboard.",
-  "permissions": ["storage", "notifications", "alarms", "webRequest"],
+  "permissions": ["storage", "webRequest"],
+  "background": { "service_worker": "background.js" },
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "24": "icons/icon24.png",
+      "32": "icons/icon32.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "24": "icons/icon24.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png",
+    "256": "icons/icon256.png",
+    "512": "icons/icon512.png"
+  },
+
   "web_accessible_resources": [
     {
       "resources": ["Inpage/pageHook.inpage.js"],
@@ -12,8 +33,13 @@
     {
       "resources": ["Inpage/pageHook.hybris.inpage.js"],
       "matches": ["*://*.zara.com/*", "*://*.mango.com/*", "*://shop.mango.com/*"]
+    },
+    {
+      "resources": ["Inpage/pageHook.sfcc.inpage.js"],
+      "matches": ["<all_urls>"]
     }
   ],
+
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.ebay.com/*",
@@ -27,27 +53,29 @@
     "*://*.dwr.com/*",
     "*://*.mango.com/*",
     "*://shop.mango.com/*",
-    "*://*.theoutnet.com/*"
+    "*://*.theoutnet.com/*",
+    "*://*.jcrew.com/*",
+    "*://*.jcrewfactory.com/*",
+    "*://*.abercrombie.com/*",
+    "*://*.hollisterco.com/*",
+    "*://*.anf.com/*"
   ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "24": "icons/icon24.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png",
-    "256": "icons/icon256.png",
-    "512": "icons/icon512.png"
-  },
-  "background": { "service_worker": "background.js" },
-  "action": {
-    "default_popup": "popup/popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "24": "icons/icon24.png",
-      "32": "icons/icon32.png"
-    }
-  },
+
   "content_scripts": [
+    {
+      "matches": [
+       "*://*.jcrew.com/*",
+        "*://*.jcrewfactory.com/*",
+        "*://*.abercrombie.com/*",
+        "*://*.hollisterco.com/*",
+        "*://*.anf.com/*"
+      ],
+      "js": ["Inpage/pageHook.sfcc.inpage.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },  
+
     {
       "matches": ["*://*.shopbop.com/*"],
       "js": [
@@ -57,6 +85,7 @@
       "run_at": "document_idle",
       "all_frames": true
     },
+
     {
       "matches": ["*://*.amazon.com/*"],
       "js": [
@@ -67,6 +96,7 @@
       "run_at": "document_start",
       "all_frames": true
     },
+
     {
       "matches": ["*://*.walmart.com/*"],
       "js": [
@@ -76,6 +106,7 @@
       "run_at": "document_idle",
       "all_frames": false
     },
+
     {
       "matches": ["*://*.zara.com/*"],
       "js": [
@@ -86,15 +117,18 @@
       "run_at": "document_start",
       "all_frames": true
     },
+
     {
       "matches": ["*://shop.mango.com/*", "*://*.mango.com/*"],
       "js": [
+        "content-scripts/pageBridge.hybris.js",
         "content-scripts/mangoAddListener.js",
         "content-scripts/toastListener.js"
       ],
       "run_at": "document_start",
       "all_frames": true
     },
+
     {
       "matches": ["*://*.ebay.com/*"],
       "js": [
@@ -104,6 +138,7 @@
       "run_at": "document_idle",
       "all_frames": true
     },
+
     {
       "matches": ["*://*.net-a-porter.com/*"],
       "js": [
@@ -113,6 +148,7 @@
       "run_at": "document_idle",
       "all_frames": false
     },
+
     {
       "matches": ["*://*.dwr.com/*"],
       "js": [
@@ -124,6 +160,7 @@
       "run_at": "document_start",
       "all_frames": true
     },
+
     {
       "matches": ["*://*.bergdorfgoodman.com/*"],
       "js": [
@@ -135,16 +172,51 @@
       "run_at": "document_start",
       "all_frames": true
     },
+
     {
-  "matches": ["*://*.theoutnet.com/*"],
-  "js": [
-    "content-scripts/pageBridge.js",
-    "content-scripts/theoutnetAddListener.js",
-    "content-scripts/toastListener.js"
-  ],
-  "run_at": "document_start",
-  "all_frames": true
-},
+      "matches": ["*://*.theoutnet.com/*"],
+      "js": [
+        "content-scripts/pageBridge.js",
+        "content-scripts/theoutnetAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    
+    {
+      "matches": ["*://*.jcrew.com/*", "https://ocapi.jcrew.com/*"],
+      "js": [
+        "content-scripts/pageBridge.js",
+        "content-scripts/sfccAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+
+    {
+      "matches": ["*://*.abercrombie.com/*"],
+      "js": [
+        "content-scripts/pageBridge.js",
+        "content-scripts/sfccAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+
+    {
+      "matches": ["*://*.hollisterco.com/*"],
+      "js": [
+        "content-scripts/pageBridge.js",
+        "content-scripts/sfccAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+
     {
       "matches": ["*://*/*"],
       "exclude_matches": [
@@ -174,7 +246,11 @@
         "*://*.dwr.com/*",
         "*://*.bergdorfgoodman.com/*",
         "*://*.mango.com/*",
-        "*://shop.mango.com/*"
+        "*://shop.mango.com/*",
+        "*://*.jcrew.com/*",
+        "https://ocapi.jcrew.com/*",
+        "*://*.abercrombie.com/*",
+        "*://*.hollisterco.com/*"
       ],
       "js": [
         "content-scripts/pageBridge.js",

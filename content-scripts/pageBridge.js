@@ -1,14 +1,20 @@
-// content-scripts/pageBridge.js
+// content-scripts/pageBridge.js (generic bridge)
 (() => {
   if (window.__UC_BRIDGE__) return;
   window.__UC_BRIDGE__ = true;
 
+  if (document.documentElement?.dataset?.alSfccInjected === "1") {
+    return;
+  }
+
   try {
     const s = document.createElement("script");
     s.src = chrome.runtime.getURL("Inpage/pageHook.inpage.js");
+    s.async = false;
     (document.head || document.documentElement).appendChild(s);
-    s.onload = () => s.remove();
-  } catch {}
+    s.remove();
+  } catch {
+  }
 
   const LAST = { url: "", t: 0 };
   const WINDOW_MS = 800;
