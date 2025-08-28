@@ -1,9 +1,9 @@
 // background.js — Unified Cart (MV3)
-// v0.4.3  (SFCC acceptance loosened; brand inference; light "Arrivals" guard; A&F BFF; pending-nudge; MV3-safe types)
+// v0.4.4  (Price/brand normalize; J.Crew GraphQL+hotness signal; SFCC+BFF; non-PDP tighten)
 
 (() => {
-  const VERSION = "0.4.3";
-  const DEBUG = true; // turn off when done
+  const VERSION = "0.4.4";
+  const DEBUG = true; // set false when done
   const log = (...a) => { if (DEBUG) try { console.log("[UnifiedCart]", ...a); } catch {} };
 
   const ENABLE_NOTIFICATIONS = false;
@@ -31,9 +31,62 @@
     try { chrome.tabs.sendMessage(tabId, msg, opts, () => void chrome.runtime?.lastError); } catch {}
   }
 
-  // ---------------- helpers ----------------
+  // ---------------- Price & brand normalization ----------------
+  const USD_HOSTS = /(\.|^)(jcrewfactory|jcrew|abercrombiekids|abercrombie|hollisterco|anf)\.com$/i;
+  const CURRENCY_HINT = /[$€£¥₹]|usd|eur|gbp|cad|aud|chf|sek|nok|dkk|inr/i;
+
+  function normalizePrice(raw, link) {
+    let s = str(raw).trim();
+    if (!s) return "";
+    if (CURRENCY_HINT.test(s)) return s; // already has symbol/code
+    // bare number → put $ for our US .coms (current scope)
+    let symbol = "$";
+    try {
+      const host = new URL(String(link || "")).hostname;
+      if (!USD_HOSTS.test(host)) symbol = "$"; // keep default for now
+    } catch {}
+    // keep digits/commas/periods, strip stray spaces
+    return symbol + s.replace(/\s+/g, "");
+  }
+
+  const BRAND_CANON = {
+    "jcrew": "J.Crew",
+    "j.crew": "J.Crew",
+    "jcrew factory": "J.Crew Factory",
+    "jcrewfactory": "J.Crew Factory",
+    "abercrombie": "Abercrombie",
+    "abercrombie & fitch": "Abercrombie & Fitch",
+    "abercrombiekids": "Abercrombie Kids",
+    "abercrombie kids": "Abercrombie Kids",
+    "hollister": "Hollister",
+    "hollisterco": "Hollister"
+  };
+
+  function inferBrandFromLink(link) {
+    try {
+      const host = new URL(String(link || "")).hostname.toLowerCase();
+      if (host.endsWith("jcrew.com")) return "J.Crew";
+      if (host.endsWith("jcrewfactory.com")) return "J.Crew Factory";
+      if (host.endsWith("abercrombie.com")) return "Abercrombie";
+      if (host.endsWith("abercrombiekids.com")) return "Abercrombie Kids";
+      if (host.endsWith("hollisterco.com")) return "Hollister";
+      if (host.endsWith("anf.com")) return "Abercrombie";
+    } catch {}
+    return "";
+  }
+
+  function canonBrand(raw, link) {
+    const v = str(raw).trim();
+    if (!v) return inferBrandFromLink(link);
+    const low = v.toLowerCase();
+    if (BRAND_CANON[low]) return BRAND_CANON[low];
+    // simple Title Case fallback
+    return v.replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  // ---------------- tiny helpers ----------------
   function isTrackingImage(url = "") {
-    const u = url.toLowerCase();
+    const u = str(url).toLowerCase();
     return !u || u.startsWith("data:") || u.endsWith(".svg") || /p13n\.gif|pixel|1x1|spacer|beacon/.test(u);
   }
   function looksLikeNoise(item = {}) {
@@ -41,32 +94,19 @@
     const p = str(item.price).trim();
     return !p && (isTrackingImage(item.img) || /p13n|1×1|1x1|pixel/.test(t));
   }
-  function inferBrandFromLink(link = "") {
-    let h = "";
-    try { h = new URL(link).hostname.toLowerCase(); } catch {}
-    if (!h) return "";
-    if (/\bamazon\.com$/.test(h)) return "Amazon";
-    if (/\bebay\.com$/.test(h)) return "eBay";
-    if (/\bwalmart\.com$/.test(h)) return "Walmart";
-    if (/\bzara\.com$/.test(h)) return "Zara";
-    if (/\bmango\.com$/.test(h)) return "Mango";
-    if (/\bjcrewfactory\.com$/.test(h)) return "J.Crew Factory";
-    if (/\bjcrew\.com$/.test(h)) return "J.Crew";
-    if (/\bhollisterco\.com$/.test(h)) return "Hollister";
-    if (/\babercrombie(kids)?\.com$/.test(h)) return "Abercrombie";
-    return h.split(".").slice(-2, -1)[0]?.replace(/^\w/, c => c.toUpperCase()) || "";
-  }
+
   function sanitizeItem(raw = {}) {
+    const link = str(raw.link);
     const item = {
-      id:   str(raw.id || raw.link || ""),
+      id:   str(raw.id || link || ""),
       pid:  str(raw.pid || ""),
       title:str(raw.title),
-      brand:str(raw.brand),
-      price:str(raw.price),
+      brand: canonBrand(raw.brand, link),
+      price: normalizePrice(raw.price, link),
       img:  str(raw.img),
-      link: str(raw.link),
+      link
     };
-    if (!item.brand) item.brand = inferBrandFromLink(item.link);
+    if (!item.brand) item.brand = inferBrandFromLink(link);
     if (item.img && item.img.length > 2048 && item.img.startsWith("data:")) item.img = "";
     return item;
   }
@@ -109,12 +149,16 @@
       const host = hostname.toLowerCase();
       const p = pathname.toLowerCase();
 
-      if (p.includes("/collections/") && !p.includes("/products/")) return false; // Shopify
+      // Shopify pattern
+      if (p.includes("/collections/") && !p.includes("/products/")) return false;
+
+      // J.Crew PLP & generic listing/search/collection routes
+      if (/\/(plp|search|collection|collections|category|categories|catalog|shop|browse)(\/|$)/.test(p)) return false;
+
+      // The Outnet category
       if (/(\.|^)theoutnet\.com$/.test(host)) {
         if (/\/shop(\/|$)/.test(p) && !/\/product(\/|$)/.test(p)) return false;
       }
-      if (/\/(collection|collections|category|categories|catalog|shop)(\/|$)/.test(p)
-          && !/\/(product|products|pdp|item)\b/.test(p)) return false;
 
       return true;
     } catch { return true; }
@@ -184,39 +228,15 @@
       if (msg?.action === "ADD_ITEM" && msg.item) {
         if (!SHOPPING_MODE) { try { sendResponse({ ok: true, ignored: true, reason: "mode_off" }); } catch {} ; return; }
 
-        const source = msg.source || "unknown";
         const item = sanitizeItem(msg.item);
 
-        // obvious noise (pixels etc)
-        if (looksLikeNoise(item)) {
-          if (DEBUG) log("ignore add: noise", item);
-          try { sendResponse({ ok: true, ignored: true, reason: "noise" }); } catch {};
-          return;
-        }
-
-        // For non-SFCC sources, enforce likely-PDP URL
-        if (source !== "sfcc" && item.link && !isLikelyProductUrl(item.link)) {
-          if (DEBUG) log("ignore add: non_pdp (non-sfcc)", item.link);
+        if (looksLikeNoise(item)) { try { sendResponse({ ok: true, ignored: true, reason: "noise" }); } catch {}; return; }
+        // Allow SFCC-sourced items even if the link looks non-PDP
+        if (item.link && !isLikelyProductUrl(item.link) && msg.source !== "sfcc") {
           try { sendResponse({ ok: true, ignored: true, reason: "non_pdp" }); } catch {};
           return;
         }
-
-        // For SFCC: allow through even without pid/price, but drop obvious category/arrivals page if no pid
-        if (source === "sfcc" && !item.pid) {
-          const title = str(item.title).toLowerCase();
-          if (/arrivals|new\s+(in|arrivals)|just\s+in|lookbook/.test(title)) {
-            if (DEBUG) log("ignore add: sfcc_category_like_title", title);
-            try { sendResponse({ ok: true, ignored: true, reason: "sfcc_category_like_title" }); } catch {};
-            return;
-          }
-        }
-
-        // Brand-specific PDP guards still apply (Amazon/Walmart/Zara)
-        if (!passesPDPGuards(item.link)) {
-          if (DEBUG) log("ignore add: guard", item.link);
-          try { sendResponse({ ok: true, ignored: true, reason: "guard" }); } catch {};
-          return;
-        }
+        if (!passesPDPGuards(item.link)) { try { sendResponse({ ok: true, ignored: true, reason: "guard" }); } catch {}; return; }
 
         const keyId   = str(item.id);
         const keyLink = str(item.link);
@@ -296,17 +316,22 @@
         return "";
       }
 
-      // ---------- SFCC (Demandware) ----------
+      // ---------- SFCC (Demandware) + A&F BFF + J.Crew GraphQL ----------
       const RE_HOST_SFCC = /(\.|^)(jcrewfactory|jcrew|abercrombiekids|abercrombie|hollisterco|anf)\.com$/i;
 
       const SFCC_URL_RE  = /\/on\/demandware\.store\/.*\/(?:Cart-(?:Add|AddMultiple)Product|AddToCart|ProductList-AddProduct)\b/i;
       const OCAPI_ADD_RE = /\/(?:s\/-\/)?dw\/shop\/v\d+(?:_\d+)?\/baskets\/[^/]+\/items\b/i;
-      // Sometimes /api/checkout/vX[.Y]/baskets/{id}/(items|line-items) with optional shipments
+      // /api/checkout/vX[.Y]/baskets/{id}/(items|line-items) optional shipments
       const SCAPI_ADD_RE = /\/api\/checkout\/v\d+(?:\.\d+)?\/baskets\/[^/]+(?:\/shipments\/[^/]+)?\/(?:items|line-items)\b/i;
 
-      // Abercrombie/Hollister BFF add intents
+      // A&F/Hollister BFF
       const RE_AF_HOST    = /(\.|^)(abercrombie|abercrombiekids|hollisterco)\.com$/i;
-      const RE_BFF_ADDURL = /\/api\/bff\/(cart|checkout|bag|basket|orders?|commerce|customer|product)\b/i;
+      const RE_BFF_ADDURL = /\/api\/bff\/(cart|checkout|bag|basket|orders?|commerce)\b/i;
+
+      // J.Crew specific
+      const RE_JCREW_HOST      = /(\.|^)jcrew\.com$/i;
+      const RE_JCREW_GRAPHQL   = /\/checkout-api\/graphql\b/i;
+      const RE_JCREW_HOT_ADD   = /\/hotness\/api\/hotness\?[^#]*\btype=addtobag\b/i; // weak signal, last resort
 
       function parseSfccRequestBody(details) {
         let pid = null, quantity = 1;
@@ -322,12 +347,9 @@
           }
 
           if (rb.raw && rb.raw.length) {
-            const parts = rb.raw.filter(p => p?.bytes).map(p => new Uint8Array(p.bytes));
-            if (parts.length) {
-              const total = parts.reduce((n, u8) => n + u8.length, 0);
-              const buf = new Uint8Array(total); let off = 0;
-              for (const u8 of parts) { buf.set(u8, off); off += u8.length; }
-              const text = new TextDecoder("utf-8").decode(buf);
+            const first = rb.raw.find(p => p?.bytes);
+            if (first?.bytes) {
+              const text = new TextDecoder("utf-8").decode(first.bytes);
 
               try {
                 const json = JSON.parse(text);
@@ -364,35 +386,53 @@
             let host = "";
             try { host = new URL(url).hostname; } catch {}
 
-            // Only watch the SFCC family of hosts to reduce noise
+            // Watch SFCC family; reduce console noise to relevant hosts
             if (!RE_HOST_SFCC.test(host)) return;
 
+            // Debug observation
             if (DEBUG) log("SFCC observe", m, host, url);
 
-            // 1) Standard SFCC adds
+            // 1) Core SFCC/OCAPI/SCAPI add endpoints
             let isAdd =
               SFCC_URL_RE.test(url) ||
               OCAPI_ADD_RE.test(url) ||
               SCAPI_ADD_RE.test(url);
 
-            // 2) Abercrombie/Hollister BFF-style adds (customer/product/checkout endpoints are involved)
+            // 2) A&F/Hollister BFF add intents
             if (!isAdd && RE_AF_HOST.test(host) && RE_BFF_ADDURL.test(url)) {
               const bodyStr = decodeBody(details);
               const looksLikeAdd =
                 /\b(addToCart|addToBag|addItem|addLineItem|cartAdd|addCartEntry)\b/i.test(bodyStr) ||
                 (/\b(product|productId|pid|sku|variant|id)\b/i.test(bodyStr) && /\b(qty|quantity)\b/i.test(bodyStr)) ||
-                /[?&]page=mini\b/i.test(url); // mini-cart refresh after add
+                /[?&]page=mini\b/i.test(url); // mini-bag refresh
               if (looksLikeAdd) {
                 isAdd = true;
                 if (DEBUG) log("A&F BFF match", url, bodyStr ? bodyStr.slice(0, 180) : "");
               }
             }
 
+            // 3) J.Crew GraphQL add intents (strong)
+            if (!isAdd && RE_JCREW_HOST.test(host) && RE_JCREW_GRAPHQL.test(url)) {
+              const bodyStr = decodeBody(details);
+              const looksLikeAdd =
+                /\b(addToBag|addToCart|addItem|addLineItem|addCartEntry|createBasket)\b/i.test(bodyStr);
+              if (looksLikeAdd) {
+                isAdd = true;
+                if (DEBUG) log("J.Crew GraphQL match", url, bodyStr ? bodyStr.slice(0, 180) : "");
+              }
+            }
+
+            // 4) J.Crew "hotness addtobag" beacon (weak, used as fallback nudge)
+            if (!isAdd && RE_JCREW_HOST.test(host) && RE_JCREW_HOT_ADD.test(url)) {
+              isAdd = true;
+              if (DEBUG) log("J.Crew hotness add signal", url);
+            }
+
             if (!isAdd) return;
 
             if (DEBUG) log("SFCC match", url);
 
-            const { pid, quantity } = parseSfccRequestBody(details); // may be null → okay
+            const { pid, quantity } = parseSfccRequestBody(details); // may be null → fine (inpage scraper fills rest)
             const payload = { url, pid, quantity: Number(quantity) || 1, ts: Date.now() };
 
             if (tabId >= 0) {
@@ -404,7 +444,7 @@
             if (DEBUG) log("SFCC handler error", e);
           }
         },
-        // MV3-valid types only
+        // MV3-valid types (avoid 'blocking' and keep requestBody access)
         { urls: ["<all_urls>"], types: ["xmlhttprequest","ping","sub_frame","main_frame","other"] },
         ["requestBody"]
       );
@@ -459,7 +499,9 @@
             const host = (() => { try { return new URL(u).hostname; } catch { return ""; } })();
 
             if (/(\.|^)zara\.(com|net)$/i.test(host)) {
-              const bodyStr = (() => { try { return decodeBody(details); } catch { return ""; } })();
+              const bodyStr = (() => {
+                try { return decodeBody(details); } catch { return ""; }
+              })();
               const hit = isZaraAddUrl(u) || hasAddIntentBody(bodyStr);
               if (hit) {
                 const tabId = details.tabId;
