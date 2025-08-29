@@ -3,7 +3,34 @@
   "name": "Unified Shopping Cart",
   "version": "0.1.26",
   "description": "Aggregate shopping carts across sites into one dashboard.",
+
   "permissions": ["storage", "webRequest"],
+  "host_permissions": [
+    "*://*.amazon.com/*",
+    "*://*.ebay.com/*",
+    "*://*.walmart.com/*",
+    "*://*.zara.com/*",
+    "*://*.zara.net/*",
+    "*://*.shopbop.com/*",
+    "*://*.net-a-porter.com/*",
+    "*://*.bergdorfgoodman.com/*",
+    "*://*.ssense.com/*",
+    "*://*.dwr.com/*",
+    "*://*.mango.com/*",
+    "*://shop.mango.com/*",
+    "*://*.theoutnet.com/*",
+    "*://*.jcrew.com/*",
+    "*://*.jcrewfactory.com/*",
+    "*://*.abercrombie.com/*",
+    "*://*.hollisterco.com/*",
+    "*://*.anf.com/*",
+    "*://*.kith.com/*",
+    "*://*.sophiebuhai.com/*",
+    "*://*.myshopify.com/*",
+    "*://*.uniqlo.com/*"
+
+  ],
+
   "background": { "service_worker": "background.js" },
 
   "action": {
@@ -40,42 +67,7 @@
     }
   ],
 
-  "host_permissions": [
-    "*://*.amazon.com/*",
-    "*://*.ebay.com/*",
-    "*://*.walmart.com/*",
-    "*://*.zara.com/*",
-    "*://*.zara.net/*",
-    "*://*.shopbop.com/*",
-    "*://*.net-a-porter.com/*",
-    "*://*.bergdorfgoodman.com/*",
-    "*://*.ssense.com/*",
-    "*://*.dwr.com/*",
-    "*://*.mango.com/*",
-    "*://shop.mango.com/*",
-    "*://*.theoutnet.com/*",
-    "*://*.jcrew.com/*",
-    "*://*.jcrewfactory.com/*",
-    "*://*.abercrombie.com/*",
-    "*://*.hollisterco.com/*",
-    "*://*.anf.com/*"
-  ],
-
   "content_scripts": [
-    {
-      "matches": [
-       "*://*.jcrew.com/*",
-        "*://*.jcrewfactory.com/*",
-        "*://*.abercrombie.com/*",
-        "*://*.hollisterco.com/*",
-        "*://*.anf.com/*"
-      ],
-      "js": ["Inpage/pageHook.sfcc.inpage.js"],
-      "run_at": "document_start",
-      "all_frames": true,
-      "world": "MAIN"
-    },  
-
     {
       "matches": ["*://*.shopbop.com/*"],
       "js": [
@@ -183,9 +175,16 @@
       "run_at": "document_start",
       "all_frames": true
     },
-    
+
     {
-      "matches": ["*://*.jcrew.com/*", "https://ocapi.jcrew.com/*"],
+      "matches": [
+        "*://*.jcrew.com/*",
+        "https://ocapi.jcrew.com/*",
+        "*://*.jcrewfactory.com/*",
+        "*://*.abercrombie.com/*",
+        "*://*.hollisterco.com/*",
+        "*://*.anf.com/*"
+      ],
       "js": [
         "content-scripts/pageBridge.js",
         "content-scripts/sfccAddListener.js",
@@ -196,26 +195,47 @@
     },
 
     {
-      "matches": ["*://*.abercrombie.com/*"],
+      "matches": ["*://*.kith.com/*", "*://*.myshopify.com/*"],
       "js": [
         "content-scripts/pageBridge.js",
-        "content-scripts/sfccAddListener.js",
-        "content-scripts/toastListener.js"
+        "content-scripts/genericAddListener.js"
       ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.kith.com/*", "*://*.myshopify.com/*"],
+      "js": ["content-scripts/toastListener.js"],
       "run_at": "document_start",
       "all_frames": true
     },
 
     {
-      "matches": ["*://*.hollisterco.com/*"],
+      "matches": ["*://*.sophiebuhai.com/*"],
       "js": [
         "content-scripts/pageBridge.js",
-        "content-scripts/sfccAddListener.js",
-        "content-scripts/toastListener.js"
+        "content-scripts/genericAddListener.js"
       ],
       "run_at": "document_start",
       "all_frames": true
     },
+    {
+    "matches": ["*://*.sophiebuhai.com/*"],
+    "js": ["content-scripts/toastListener.js"],
+    "run_at": "document_start",
+    "all_frames": true
+    },
+
+    {
+    "matches": ["*://*.uniqlo.com/*"],
+    "js": [
+      "content-scripts/pageBridge.js",
+      "content-scripts/genericAddListener.js",
+      "content-scripts/toastListener.js"
+    ],
+    "run_at": "document_start",
+    "all_frames": true
+    }, 
 
     {
       "matches": ["*://*/*"],
@@ -249,8 +269,12 @@
         "*://shop.mango.com/*",
         "*://*.jcrew.com/*",
         "https://ocapi.jcrew.com/*",
+        "*://*.jcrewfactory.com/*",
         "*://*.abercrombie.com/*",
-        "*://*.hollisterco.com/*"
+        "*://*.hollisterco.com/*",
+        "*://*.anf.com/*",
+        "*://*.kith.com/*",
+        "*://*.sophiebuhai.com/*"
       ],
       "js": [
         "content-scripts/pageBridge.js",

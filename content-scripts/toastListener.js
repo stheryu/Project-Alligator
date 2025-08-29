@@ -66,6 +66,11 @@
       showToast(text, pos);
     } catch {}
   });
+  // --- end of toast listener ---
+  if (!self.chrome || !chrome.runtime || !chrome.runtime.onMessage) {
+  console.warn("[UnifiedCart toast] chrome.runtime not available; skipping toast listener");
+  return;
+}
 })();
 
 
