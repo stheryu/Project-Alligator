@@ -6,45 +6,52 @@
 
   const DEBUG = true;
   const log = (...a) => DEBUG && console.log("[UnifiedCart-Generic]", ...a);
-  const HOST = location.hostname.toLowerCase();
 
-  // Hosts where “quick” is noisy → prefer nudges/settled only
-  const DISABLE_QUICK_HOSTS = /(\.|^)(amazon|zara|mango|kith|theoutnet)\.com$/i;
+  const HOST      = location.hostname.toLowerCase();
+  const IS_GILT   = /(\.|^)(gilt|ruelala)\.com$/i.test(HOST);
+  const IS_ZARA   = /(\.|^)zara\.(com|net)$/i.test(HOST);
+  const IS_NIKE   = /(\.|^)nike\.com$/i.test(HOST);
   const IS_AMAZON = /\bamazon\./i.test(HOST);
 
-  // Hosts that legitimately add off-PDP (allow click + nudge off-PDP)
-  const ALLOW_OFF_PDP_HOSTS =
-    /(\.|^)uniqlo\.com$|(\.|^)zara\.(com|net)$|(\.|^)mango\.com$|(\.|^)ebay\.com$/i;
+  // “Quick” is noisy here → rely on settled-only for these
+  const DISABLE_QUICK_HOSTS =
+    /(\.|^)(amazon|zara|mango|kith|theoutnet|gilt|ruelala|nike)\.(com|net)$/i;
 
-  // ---------- global state (hot-reload safe) ----------
+  // Off-PDP legit add flows
+  const ALLOW_OFF_PDP_HOSTS =
+    /(\.|^)uniqlo\.com$|(\.|^)zara\.(com|net)$|(\.|^)mango\.com$|(\.|^)ebay\.com$|(\.|^)gilt\.com$|(\.|^)ruelala\.com$/i;
+
+  // ---------- global state ----------
   const STATE = (window.__UC_GENERIC_STATE ||= {
     wired: false,
     listeners: [],
     modeEnabled: true,
   });
-
   const __UC_MODE = {
     get enabled() { return STATE.modeEnabled; },
     set enabled(v) { STATE.modeEnabled = !!v; }
   };
-
   const __listeners = STATE.listeners;
   function on(t, type, h, opts) { t.addEventListener(type, h, opts); __listeners.push([t, type, h, opts]); }
   function offAll() { for (const [t, ty, h, o] of __listeners) t.removeEventListener(ty, h, o); __listeners.length = 0; }
 
-  // ---------- tiny helpers ----------
-  const $    = (s) => document.querySelector(s);
-  const $$   = (s) => Array.from(document.querySelectorAll(s));
+  // ---------- helpers ----------
+  const $  = (s, root=document) => root.querySelector(s);
+  const $$ = (s, root=document) => Array.from(root.querySelectorAll(s));
   const txt  = (s) => ($(s)?.textContent || "").trim();
   const attr = (s, n) => $(s)?.getAttribute(n) || "";
   const first= (a) => Array.isArray(a) ? a[0] : a;
-  const token= (s) => (String(s).match(/[$€£]\s?\d[\d.,]+/) || [""])[0];
+
+  // money: symbol OR ISO code before/after
+  const TOKEN_RE = /(?:[$€£¥₹]\s?\d[\d.,]*|\b(?:USD|CAD|EUR|GBP|JPY|INR)\b\s?\d[\d.,]*|\d[\d.,]*\s?\b(?:USD|CAD|EUR|GBP|JPY|INR)\b)/i;
+  const token = (s) => (String(s).match(TOKEN_RE) || [""])[0];
+
   const absUrl = (u) => { try { return new URL(u, location.href).toString(); } catch { return u || ""; } };
-  function looksLikePixel(u = "") {
+  const looksLikePixel = (u = "") => {
     const x = String(u).toLowerCase();
     return !x || x.startsWith("data:") || x.endsWith(".svg") || /pixel|1x1|spacer|beacon/.test(x);
-  }
-  function pickBestFromSrcset(ss) {
+  };
+  const pickBestFromSrcset = (ss) => {
     if (!ss) return "";
     try {
       return ss.split(",")
@@ -56,21 +63,82 @@
         })
         .sort((a, b) => b.width - a.width)[0]?.url || "";
     } catch { return ""; }
-  }
-  function centsToCurrency(cents, cur = "USD") {
+  };
+  const centsToCurrency = (cents, cur = "USD") => {
     const n = Number(cents);
-    if (Number.isFinite(n)) return `${cur === "USD" ? "$" : cur} ${(n / 100).toFixed(2)}`;
-    return "";
+    return Number.isFinite(n) ? `${cur === "USD" ? "$" : cur} ${(n / 100).toFixed(2)}` : "";
+  };
+
+  // price sanitation + noise filters
+  const CUR_NUM_RE = /([$€£¥₹])\s*([0-9][\d.,]*)|(?:\b(USD|CAD|EUR|GBP|JPY|INR)\b)\s*([0-9][\d.,]*)|([0-9][\d.,]*)\s*\b(USD|CAD|EUR|GBP|JPY|INR)\b/i;
+  const BNPL_RE = /(afterpay|klarna|affirm|sezzle|quadpay|zip\s*pay|shop\s*pay|paypal\s*pay|interest[-\s]?free|installments?|installment|per\s*(month|mo\.?|payment|installment)|\b\d+\s*(x|payments?)\s*of|\bpay\s+in\s+\d+)/i;
+  // Shipping-pass / membership promos (Rue/Gilt)
+  const MEMBERSHIP_RE = /(rue\s*now|rue\s*unlimited|gilt\s*unlimited|unlimited\s*shipping|shipping\s*pass|membership|subscribe|trial|free\s*shipping\s*(?:year|every|today)?)/i;
+  // Labels that typically mean MSRP/list/original
+  const LISTISH_RE = /\b(list|msrp|compare|original|was|before|strikethrough|tachado|prix\s*barré|precio\s*tachado)\b/i;
+  // Labels that typically mean “current / now / sale”
+  const CURRENTISH_RE = /\b(now|our\s*price|current|sale|today|your\s*price|price\s*(?:now|today))\b/i;
+
+  function priceToCents(text) {
+    const m = String(text || "").match(CUR_NUM_RE);
+    if (!m) return null;
+    const raw = m[2] || m[4] || m[5];
+    const num = String(raw).replace(/[^\d.,]/g, "").replace(/[.,](?=\d{3}\b)/g, "").replace(",", ".");
+    const f = parseFloat(num);
+    return Number.isFinite(f) ? Math.round(f * 100) : null;
+  }
+  function isValidNonZeroPrice(p) {
+    if (!p) return false;
+    if (/free/i.test(p)) return true;
+    const c = priceToCents(p);
+    return c != null && c > 0;
+  }
+  const cleanPrice = (p) => String(p || "").replace(/[.,]\s*$/, "").trim();
+
+  function nodeTextBag(el) {
+    let cur = el, out = "";
+    for (let i = 0; i < 3 && cur; i++) {
+      out += " " + (cur.textContent || "") + " " + (cur.className || "") + " " + (cur.id || "");
+      cur = cur.parentElement;
+    }
+    return out.toLowerCase();
+  }
+  const isBnplNode        = (el) => BNPL_RE.test(nodeTextBag(el));
+  const isMembershipNode  = (el) => MEMBERSHIP_RE.test(nodeTextBag(el));
+  const isListishNode     = (el) => LISTISH_RE.test(nodeTextBag(el));
+  const isCurrentishNode  = (el) => CURRENTISH_RE.test(nodeTextBag(el));
+
+  function pickBestPriceTokenFrom(nodes, { preferMin = true, minCents = 0 } = {}) {
+    const pairs = [];
+    for (const el of nodes) {
+      if (!el) continue;
+      if (isBnplNode(el) || isMembershipNode(el)) continue;
+      const t = token(el.textContent || "") || token(el.getAttribute?.("content") || "");
+      const cents = priceToCents(t);
+      if (cents && cents > 0) {
+        if (cents >= minCents) pairs.push([t, cents, el]);
+      }
+      // also scan attributes for embedded numbers
+      for (const a of Array.from(el.attributes || [])) {
+        const maybe = token(a.value || "");
+        const c2 = priceToCents(maybe);
+        if (c2 && c2 > 0 && c2 >= minCents) pairs.push([maybe, c2, el]);
+      }
+    }
+    if (!pairs.length) return "";
+    // If any look “currentish”, restrict to those
+    const currentish = pairs.filter(([t,c,el]) => isCurrentishNode(el) && !isListishNode(el));
+    const nonList    = pairs.filter(([t,c,el]) => !isListishNode(el));
+    const source = currentish.length ? currentish : (nonList.length ? nonList : pairs);
+    source.sort((a, b) => preferMin ? (a[1] - b[1]) : (b[1] - a[1]));
+    return cleanPrice(source[0][0]);
   }
 
-  // ---------- Amazon: require real Add-to-Cart click recently ----------
+  // ---------- Amazon guard ----------
   const AMZ_ADD_SELECTORS = [
-    "#add-to-cart-button",
-    "#add-to-cart-button-ubb",
-    'input[name="submit.add-to-cart"]',
-    'form[action*="handle-buy-box"] [type="submit"]',
-    "[data-action='add-to-cart']",
-    "[aria-labelledby*='add-to-cart-button']"
+    "#add-to-cart-button","#add-to-cart-button-ubb",
+    'input[name="submit.add-to-cart"]','form[action*="handle-buy-box"] [type="submit"]',
+    "[data-action='add-to-cart']","[aria-labelledby*='add-to-cart-button']"
   ].join(",");
   let amzLastAddClickTs = 0;
   document.addEventListener("click", (e) => {
@@ -80,8 +148,7 @@
       if (btn) amzLastAddClickTs = Date.now();
     } catch {}
   }, true);
-  const amzClickedRecently = (ms = 6000) =>
-    IS_AMAZON && (Date.now() - amzLastAddClickTs) < ms;
+  const amzClickedRecently = (ms = 6000) => IS_AMAZON && (Date.now() - amzLastAddClickTs) < ms;
 
   // ---------- JSON & microdata ----------
   function findProductNode(node) {
@@ -132,22 +199,22 @@
           for (const k of Object.keys(obj)) { const r = deepFind(obj[k]); if (r) return r; }
           return null;
         };
-        const hit = deepFind(json);
-        if (hit) return hit;
+        return deepFind(json);
       } catch {}
     }
     return null;
   }
-  const microName  = () => txt('[itemprop="name"]') || "";
+  const microName = () => txt('[itemprop="name"]') || "";
   function microPrice() {
     const el = document.querySelector('[itemprop="price"]');
     if (!el) return "";
     const c = el.getAttribute("content");
     if (c) {
       const n = Number(c);
-      return Number.isFinite(n) ? `$ ${n.toFixed(2)}` : token(c);
+      if (Number.isFinite(n) && n > 0) return `$ ${n.toFixed(2)}`;
     }
-    return token(el.textContent || "");
+    const tok = token(el.textContent || "");
+    return isValidNonZeroPrice(tok) ? cleanPrice(tok) : "";
   }
   function microImage() {
     const el = document.querySelector('[itemprop="image"]');
@@ -162,12 +229,12 @@
     const ogType = attr('meta[property="og:type"]','content') || "";
     if (/product/i.test(ogType)) return true;
 
-    if (document.querySelector('form[action*="/cart/add"]') ||
-        document.querySelector('[name="add"]') ||
-        document.querySelector('[data-add-to-cart]')) return true;
-    if (document.querySelector('input[name="id"]') &&
-        (document.querySelector('[type="submit"][name="add"]') ||
-         document.querySelector('[data-product-form]'))) return true;
+    const formish =
+      document.querySelector('form[action*="/cart/add"]') ||
+      document.querySelector('[name="add"]') ||
+      document.querySelector('[data-add-to-cart]') ||
+      document.querySelector('input[name="id"]');
+    if (formish) return true;
 
     if (document.querySelector("form.cart") ||
         document.querySelector("button.single_add_to_cart_button") ||
@@ -195,29 +262,16 @@
 
     if (document.querySelector('button[data-hook="add-to-cart"]')) return true;
 
-    // Visual checks
+    // visual checks
     if (!document.querySelector("h1")) return false;
     const hasPrice = Array.from(document.querySelectorAll("span,div,p,strong,b"))
-      .some(el => /[$€£]\s?\d/.test(el.textContent || ""));
+      .some(el => TOKEN_RE.test(el.textContent || ""));
     if (!hasPrice) return false;
+
     const img = document.querySelector("picture img, img");
     const src = img?.getAttribute("src") || img?.src || "";
     if (!src || looksLikePixel(src)) return false;
 
-    // URL checks; skip strictness for allowed off-PDP hosts
-    const path = location.pathname.toLowerCase();
-    const isProductPath =
-      /\/products?\//.test(path) ||
-      /\/product\//.test(path)  ||
-      /\/p\//.test(path)        ||
-      /\/dp\//.test(path)       ||
-      /\/(item|items|sku|prod|goods|shop)\//.test(path) ||
-      /-p\d+(?:\.html|$)/.test(path);
-    if (!isProductPath && !ALLOW_OFF_PDP_HOSTS.test(HOST)) {
-      if (/(^|\/)(cart|checkout|shopping-?bag)(\/|$)/.test(path)) return false;
-      if (/(^|\/)(wishlist|account|login|register)(\/|$)/.test(path)) return false;
-      if (/(^|\/)(collection|collections|category|categories|catalog)(\/|$)/.test(path)) return false;
-    }
     return true;
   }
 
@@ -239,19 +293,23 @@
     const og = attr('meta[property="og:image"]','content') ||
                attr('meta[property="og:image:secure_url"]','content');
     if (og && !looksLikePixel(og)) return absUrl(og);
+
     const ld = parseLD();
     if (ld?.image) {
       const v = first(ld.image);
       const url = (typeof v === "string") ? v : (v && typeof v === "object" && v.url) ? v.url : "";
       if (url && !looksLikePixel(url)) return absUrl(url);
     }
+
     const sj = parseShopifyProductJSON();
     if (sj?.images?.length) {
       const v = first(sj.images);
       const url = (typeof v === "string") ? v : v?.src || v?.url || "";
       if (url && !looksLikePixel(url)) return absUrl(url);
     }
-    const mi = microImage(); if (mi && !looksLikePixel(mi)) return mi;
+
+    const mi = microImage();
+    if (mi && !looksLikePixel(mi)) return mi;
 
     const imgEl = document.querySelector("picture img") || document.querySelector("img");
     if (imgEl) {
@@ -267,6 +325,7 @@
       const best2 = pickBestFromSrcset(ss2);
       if (best2 && !looksLikePixel(best2)) return best2;
     }
+
     const lazyImg = document.querySelector("img[data-src], img[data-original], img[data-lazy], img[data-srcset]");
     if (lazyImg) {
       const lazySrcset = lazyImg.getAttribute("data-srcset");
@@ -279,16 +338,126 @@
       );
       if (lazySrc && !looksLikePixel(lazySrc)) return lazySrc;
     }
+
     const preload = Array.from(document.querySelectorAll('link[rel="preload"][as="image"]'))
       .map(l => absUrl(l.getAttribute("href") || l.href))
       .find(href => href && !looksLikePixel(href));
     if (preload) return preload;
 
+    // CSS background-image fallback (helps COS/Zara wrappers)
+    {
+      const cands = document.querySelectorAll('.pdp, .product, .gallery, .media, [class*="image"], [class*="media"]');
+      for (const el of cands) {
+        const bg = getComputedStyle(el).backgroundImage || "";
+        const m = bg && bg.match(/url\((["']?)(.*?)\1\)/);
+        if (m && m[2] && !looksLikePixel(m[2])) {
+          const u = absUrl(m[2]);
+          if (u) return u;
+        }
+      }
+    }
+
     const tw = attr('meta[name="twitter:image"]','content');
     if (tw && !looksLikePixel(tw)) return absUrl(tw);
+
     return "";
   }
+
+  // --- Gilt/Rue: membership-safe, list-avoiding, “current” price ---
+  function extractPriceGiltRue() {
+    const MAIN = $("main") || $("article") || document.body;
+
+    // Favor aria “current price” or “our price”
+    const aria = $('div[aria-label*="current price" i], [aria-label*="our price" i], [aria-label*="now price" i]', MAIN);
+    if (aria && !isMembershipNode(aria) && !isBnplNode(aria)) {
+      const t = token(aria.getAttribute("aria-label") || "");
+      if (isValidNonZeroPrice(t)) return cleanPrice(t);
+    }
+
+    // Strong “current/sale/now” hooks
+    const strongSel = [
+      '.product-detail__price .bfx-price',
+      '.product-detail__list-price .bfx-price',
+      '.product-detail__list-price',
+      '.price--sale, .sale, .sale-price, .now, .priceNow, .price__current',
+      '[data-testid*="price-now"]','[data-test*="price-now"]',
+      '[data-testid*="sale"]','[data-test*="sale"]'
+    ];
+    const strong = pickBestPriceTokenFrom(strongSel.map(s => $(s, MAIN)), { preferMin:true, minCents:1500 /* dodge $9.99/$11.99 pass */ });
+    if (isValidNonZeroPrice(strong)) return cleanPrice(strong);
+
+    // “Our price” SR anchor → nearby scan (prefer MIN to avoid list)
+    const sr = Array.from($$('.screen-reader-only', MAIN)).find(el => /\bour price\b/i.test(el.textContent || ""));
+    if (sr) {
+      const scope = sr.parentElement || sr.closest("div,section,article,form") || MAIN;
+      const near = $$("span,div,b,strong,p", scope).filter(el => !isBnplNode(el) && !isMembershipNode(el));
+      const best = pickBestPriceTokenFrom(near, { preferMin:true, minCents:1500 });
+      if (isValidNonZeroPrice(best)) return cleanPrice(best);
+    }
+
+    // Constrain to same container as Add button; prefer MIN over list/MSRP
+    const addBtn = $([
+      "[data-test*='add']","[data-testid*='add']","[data-qa*='add']",
+      "[data-action='add-to-cart']","[data-hook='add-to-cart']","#add-to-bag","#add-to-cart",
+      "button.add-to-cart","#product-addtocart-button","[data-role='tocart']"
+    ].join(","), MAIN);
+    if (addBtn) {
+      const scope = addBtn.closest("section,article,form,div") || MAIN;
+      const nodes = $$("[class*='price'],[data-test*='price'],[data-testid*='price'],span,div,b,strong,p", scope)
+        .filter(el => !isBnplNode(el) && !isMembershipNode(el));
+      const best = pickBestPriceTokenFrom(nodes, { preferMin:true, minCents:1500 });
+      if (isValidNonZeroPrice(best)) return cleanPrice(best);
+    }
+
+    return ""; // let generic flow try next
+  }
+
+  // ---------- price extractor ----------
   function extractPrice() {
+    // 0) Site-specific first
+    if (IS_GILT) {
+      const gp = extractPriceGiltRue();
+      if (isValidNonZeroPrice(gp)) return gp;
+    }
+
+    const MAIN = $("main") || $("article") || document.body;
+
+    // 1) Nike: aria-label + tuned current container
+    if (IS_NIKE) {
+      const aria = $('div[aria-label*="current price" i]', MAIN)?.getAttribute("aria-label") || "";
+      const ariaTok = token(aria);
+      if (isValidNonZeroPrice(ariaTok)) return cleanPrice(ariaTok);
+      const nikeCur = [
+        '[data-testid="currentPrice-container"]','#price-container [data-testid="currentPrice-container"]',
+        '[data-qa*="current-price"]','[data-test="product-price"]',
+        '.is--current-price, .current-price, .product-price.is--current-price',
+        '[data-testid*="price-current"]','[data-testid*="pdp-product-price"]'
+      ].map(sel => $(sel, MAIN)).find(Boolean);
+      if (nikeCur && !isBnplNode(nikeCur)) {
+        const t = token(nikeCur.textContent || nikeCur.getAttribute?.("content") || "");
+        if (isValidNonZeroPrice(t)) return cleanPrice(t);
+      }
+    }
+    // 1b) Zara: micro + current
+    if (IS_ZARA) {
+      const micro = $('[itemprop="price"]', MAIN);
+      if (micro) {
+        const c = micro.getAttribute("content");
+        if (c) { const n = Number(c); if (Number.isFinite(n) && n > 0) return `$ ${n.toFixed(2)}`; }
+        const t = token(micro.textContent || "");
+        if (isValidNonZeroPrice(t)) return cleanPrice(t);
+      }
+      const zEl = [
+        '.current-price, .price__current, .price-current',
+        '[data-qa*="current-price"]','[data-testid*="price-now"]','[aria-label*="current price" i]'
+      ].map(sel => $(sel, MAIN)).find(Boolean);
+      if (zEl && !isBnplNode(zEl)) {
+        const t = token(zEl.textContent || zEl.getAttribute?.("content") || "");
+        if (isValidNonZeroPrice(t)) return cleanPrice(t);
+      }
+    }
+
+    // 2) Structured data
     const ld = parseLD();
     if (ld?.offers) {
       const offers = Array.isArray(ld.offers) ? ld.offers : [ld.offers];
@@ -297,25 +466,31 @@
         if (p != null && p !== "") {
           const n = Number(p);
           const cur = o.priceCurrency || "USD";
-          return Number.isFinite(n) ? `${cur === "USD" ? "$" : cur} ${n.toFixed(2)}` : token(p);
+          if (Number.isFinite(n) && n > 0) return `${cur === "USD" ? "$" : cur} ${n.toFixed(2)}`;
+          const tok = token(String(p));
+          if (isValidNonZeroPrice(tok)) return cleanPrice(tok);
         }
       }
     }
+
+    // 3) Shopify JSON
     const sj = parseShopifyProductJSON();
     if (sj?.variants?.length) {
-      const v0 = sj.variants[0];
-      if (typeof v0.price === "number") return centsToCurrency(v0.price, sj.currency || "USD");
-      if (typeof v0.price === "string") {
-        const n = Number(v0.price);
-        if (Number.isFinite(n)) return `$ ${n.toFixed(2)}`;
-        const tok = token(v0.price); if (tok) return tok;
-      }
-      if (typeof v0.compare_at_price === "number") return centsToCurrency(v0.compare_at_price, sj.currency || "USD");
-      if (typeof v0.compare_at_price === "string") {
-        const n2 = Number(v0.compare_at_price);
-        if (Number.isFinite(n2)) return `$ ${n2.toFixed(2)}`;
+      const chosen = sj.variants.find(v => v.available && (v.featured || v.selected)) || sj.variants[0];
+      if (chosen) {
+        if (typeof chosen.price === "number" && chosen.price > 0) return centsToCurrency(chosen.price, sj.currency || "USD");
+        if (typeof chosen.price === "string") {
+          const n = Number(chosen.price); if (Number.isFinite(n) && n > 0) return `$ ${n.toFixed(2)}`;
+          const tok = token(chosen.price); if (isValidNonZeroPrice(tok)) return cleanPrice(tok);
+        }
+        if (typeof chosen.compare_at_price === "number" && chosen.compare_at_price > 0) return centsToCurrency(chosen.compare_at_price, sj.currency || "USD");
+        if (typeof chosen.compare_at_price === "string") {
+          const n2 = Number(chosen.compare_at_price); if (Number.isFinite(n2) && n2 > 0) return `$ ${n2.toFixed(2)}`;
+        }
       }
     }
+
+    // 4) Meta/micro
     const mp = microPrice() ||
                attr('meta[itemprop="price"]','content') ||
                attr('meta[property="product:price:amount"]','content') ||
@@ -323,14 +498,41 @@
                attr('meta[name="twitter:data1"]','content');
     if (mp) {
       const n = Number(mp);
-      return Number.isFinite(n) ? `$ ${n.toFixed(2)}` : token(mp);
+      if (Number.isFinite(n) && n > 0) return `$ ${n.toFixed(2)}`;
+      const tok = token(mp);
+      if (isValidNonZeroPrice(tok)) return cleanPrice(tok);
     }
-    const cand = Array.from(document.querySelectorAll('[class*="price"], [data-testid*="price"], [itemprop*="price"], span, div'))
-      .map(el => el.textContent && el.textContent.trim())
-      .filter(Boolean)
-      .filter(t => !/\b(per|\/)\s?(count|ct|ea|each|oz|lb|kg|ml|g)\b/i.test(t))
-      .find(t => /[$€£]\s?\d/.test(t));
-    return cand ? token(cand) : "";
+
+    // 5) Scoped DOM heuristics near title / add button
+    const titleEl = $("h1,[itemprop='name']", MAIN) || MAIN;
+    const addBtn = $([
+      "#add-to-cart-button","[data-action='add-to-cart']","button.add-to-cart",
+      "[data-button-action='add-to-cart']","[data-add-to-cart]","[data-hook='add-to-cart']",
+      "#product-addtocart-button","[data-role='tocart']","[name='add']","#add-to-bag","#add-to-cart",
+      // Zara/Nike patterns
+      "[data-qa*='add-to-cart']","[data-qa*='addToCart']","[data-testid*='add-to-cart']",
+      "[aria-label*='add to cart' i]","[aria-label*='add to bag' i]"
+    ].join(","), MAIN);
+    const scopes = [
+      titleEl.closest("section, article, main, div, form") || MAIN,
+      addBtn?.closest?.("section, article, main, div, form") || null
+    ].filter(Boolean);
+    for (const scope of scopes) {
+      const nodes = $$(
+        '[data-testid*="price"],[data-test*="price"],[class*="price"],[id*="price"],.price,.product-price,.pdp-price,.sale-price,.member-price,span,div,b,strong,p',
+        scope
+      ).filter(el => !isBnplNode(el) && !isMembershipNode(el));
+      const best = pickBestPriceTokenFrom(nodes, { preferMin: IS_ZARA || IS_NIKE, minCents: IS_GILT ? 1500 : 0 });
+      if (isValidNonZeroPrice(best)) return cleanPrice(best);
+    }
+
+    // 6) Whole-page fallback
+    const preferMin = IS_ZARA || IS_NIKE; // sale < list; for Gilt we’ve already handled above
+    const nodes = $$(
+      '[data-testid*="price"],[data-test*="price"],[itemprop*="price"],[class*="price"],[id*="price"],.price,.product-price,.pdp-price,.sale-price,.member-price,span,div,b,strong,p'
+    ).filter(el => !isBnplNode(el) && !isMembershipNode(el));
+    const best = pickBestPriceTokenFrom(nodes, { preferMin, minCents: IS_GILT ? 1500 : 0 });
+    return isValidNonZeroPrice(best) ? cleanPrice(best) : "";
   }
 
   // ---------- item builder & send ----------
@@ -356,17 +558,23 @@
 
   // ---------- dual-shot add flow ----------
   let sentQuick = false, sentSettled = false, lastKey = "", lastAt = 0;
-  function debounce(k, ms) { const now = Date.now(); if (k === lastKey && now - lastAt < ms) return false; lastKey = k; lastAt = now; return true; }
+  const debounce = (k, ms) => { const now = Date.now(); if (k === lastKey && now - lastAt < ms) return false; lastKey = k; lastAt = now; return true; };
 
-  function settleThenScrape(ms = 900) {
+  function settleThenScrape(ms) {
+    const timeout = ms ?? (IS_GILT ? 2600 : (IS_NIKE || IS_ZARA) ? 1500 : 900);
+    const strictPrice = IS_GILT;
     return new Promise((resolve) => {
       let done = false; const initial = buildItem();
-      if (initial.price || initial.img) { done = true; return resolve(initial); }
-      const timer = setTimeout(() => { if (!done) { done = true; obs?.disconnect?.(); resolve(buildItem()); } }, ms);
+      const initialOk = strictPrice
+        ? (isValidNonZeroPrice(initial.price) && initial.img)
+        : (initial.price || initial.img);
+      if (initialOk) return resolve(initial);
+      const timer = setTimeout(() => { if (!done) { done = true; obs?.disconnect?.(); resolve(buildItem()); } }, timeout);
       const obs = new MutationObserver(() => {
         if (done) return;
         const item = buildItem();
-        if (item.price || item.img) { clearTimeout(timer); done = true; obs.disconnect(); resolve(item); }
+        const ok = strictPrice ? (isValidNonZeroPrice(item.price) && item.img) : (item.price || item.img);
+        if (ok) { clearTimeout(timer); done = true; obs.disconnect(); resolve(item); }
       });
       obs.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
     });
@@ -378,8 +586,10 @@
     if (!allowOff && !looksLikePDP()) return;
     if (sentQuick) return;
     if (!debounce(location.href, 200)) return;
+    if (DISABLE_QUICK_HOSTS.test(HOST)) return; // skip quick
     const item = buildItem();
     if (!item.title) return;
+    if (!isValidNonZeroPrice(item.price)) return;
     log("ADD_ITEM quick", item);
     sendItemSafe(item);
     sentQuick = true;
@@ -407,7 +617,7 @@
     sentSettled = true;
   }
 
-  // ---------- cart/bag count watcher (covers off-PDP tile adds) ----------
+  // ---------- cart/bag count + mini-cart watcher ----------
   let CART_COUNT_SNAPSHOT = null;
   function readCartLikeCount() {
     const selectors = [
@@ -427,11 +637,10 @@
     }
     return best;
   }
-  function watchForCartIncrement(windowMs = 2500, pollMs = 150) {
+  function watchForCartIncrement(windowMs = IS_GILT ? 3500 : 2500, pollMs = 150) {
     const startCount = readCartLikeCount();
     const start = Date.now();
     if (CART_COUNT_SNAPSHOT == null && startCount != null) CART_COUNT_SNAPSHOT = startCount;
-
     const timer = setInterval(() => {
       const now = Date.now();
       const cur = readCartLikeCount();
@@ -444,6 +653,19 @@
       }
     }, pollMs);
   }
+  function watchMiniCartOpen(windowMs = 2500) {
+    const start = Date.now();
+    const obs = new MutationObserver(() => {
+      const panel = document.querySelector('[data-qa*="mini-cart"],[data-testid*="mini-cart"],[id*="mini-cart"],[class*="mini-cart"],[class*="cart-drawer"]');
+      if (panel && (panel.offsetParent !== null || getComputedStyle(panel).visibility !== "hidden")) {
+        obs.disconnect();
+        sendSettledForced();
+      } else if (Date.now() - start > windowMs) {
+        obs.disconnect();
+      }
+    });
+    obs.observe(document.documentElement, { childList:true, subtree:true, attributes:true });
+  }
 
   // ---------- add/buy button detection ----------
   const BUTTONISH_SEL = [
@@ -453,25 +675,27 @@
     "[data-add-to-cart]","[data-hook='add-to-cart']",
     "#product-addtocart-button","[data-role='tocart']",
     "[name='add']","#add-to-bag","#add-to-cart",
-    "[data-testid*='add']","[data-test*='add']","[data-qa*='add']"
+    "[data-testid*='add']","[data-test*='add']","[data-qa*='add']",
+    // Zara/Nike explicit hooks
+    "[data-qa*='add-to-cart']","[data-qa*='addToCart']","[data-testid*='add-to-cart']",
+    "[aria-label*='add to cart' i]","[aria-label*='add to bag' i]"
   ].join(",");
-  const POS = /\badd(?:ing)?(?:\s+to)?\s+(?:shopping\s+)?(?:bag|cart)\b|\bbuy now\b|\bpurchase\b/i;
+
+  // Multilingual “add to cart/bag”
+  const POS_L10N = /(add(?:ing)?\s*(?:to)?\s*(?:shopping\s*)?(?:bag|cart)|buy\s*now|purchase|ajouter\s+au\s+panier|añadir(?:\s+al)?\s+(?:carrito|cesta)|aggiungi\s+al\s+carrello|in\s+den\s+warenkorb|カートに追加|加入(?:購物車|购物车)|장바구니에\s*담기|добавить\s+в\s+корзину)/i;
   const NEG = /\b(add to wish|wishlist|favorites|list|registry|address|payment|card|newsletter)\b/i;
 
   function isVariantUI(node) {
     if (!node || node.nodeType !== 1) return false;
     const tag  = node.tagName;
     if (tag === "SELECT" || tag === "OPTION") return true;
-
     const role = String(node.getAttribute?.("role") || "").toLowerCase();
     if (role === "listbox" || role === "option" || role === "radiogroup" || role === "radio") return true;
-
     const cls  = String(node.className || "").toLowerCase();
     const name = String(node.getAttribute?.("name") || "").toLowerCase();
     const id   = String(node.id || "").toLowerCase();
     const dti  = String(node.getAttribute?.("data-testid") || "").toLowerCase();
     const dha  = String(node.getAttribute?.("data-action") || "").toLowerCase();
-
     if (/\b(size|sizes|swatch|variant|variation|colour|color|fit)\b/.test(cls)) return true;
     if (/\b(size|variant|swatch|colour|color|fit)\b/.test(name)) return true;
     if (/\b(size|variant|swatch|colour|color|fit)\b/.test(id)) return true;
@@ -479,7 +703,6 @@
     if (/attribute|option|selector/.test(cls) && /size|color|colour/.test(cls)) return true;
     if (/select/.test(dha) && /variant|size|color|colour/.test(dha)) return true;
     if (/size/.test(dti) && /(option|selector|swatch)/.test(dti)) return true;
-
     for (const a of Array.from(node.attributes || [])) {
       const an = String(a.name).toLowerCase();
       const av = String(a.value).toLowerCase();
@@ -489,6 +712,21 @@
         return true;
       }
     }
+    return false;
+  }
+
+  function elementIsInteractive(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    if (tag === "BUTTON") return true;
+    if (tag === "INPUT") {
+      const t = (el.getAttribute("type") || "").toLowerCase();
+      return t === "submit" || t === "button";
+    }
+    if (tag === "A" && el.hasAttribute("href")) return true;
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    if (role === "button") return true;
+    if (el.hasAttribute("onclick")) return true;
     return false;
   }
 
@@ -508,7 +746,7 @@
 
     if (s.includes("adding")) return false;
     if (NEG.test(s)) return false;
-    if (POS.test(s)) return true;
+    if (POS_L10N.test(s)) return true;
 
     if (/\badd-to-cart\b|\bproduct-form__submit\b|\bshopify-payment-button\b/.test(s)) return true;
     if (/\bsingle_add_to_cart_button\b|\badd_to_cart_button\b|\bwoocommerce\b/.test(s)) return true;
@@ -520,13 +758,15 @@
     return false;
   }
 
+  // IMPORTANT FIX: don’t bail just because an *ancestor* is variant UI
   function closestActionEl(start) {
-    let el = start && start.nodeType === 1 ? start : start?.parentElement || null;
-    for (let i = 0; i < 10 && el; i++) {
-      if (isVariantUI(el)) return null;
-      if (el.matches?.(BUTTONISH_SEL) || looksLikeAdd(el)) {
-        const disabled = el.hasAttribute?.("disabled") ||
-          String(el.getAttribute?.("aria-disabled") || "").toLowerCase() === "true";
+    const startEl = start && start.nodeType === 1 ? start : start?.parentElement || null;
+    if (!startEl) return null;
+    if (isVariantUI(startEl)) return null; // only bail if the *clicked node itself* is variant UI
+    let el = startEl;
+    for (let i = 0; i < 20 && el; i++) {
+      if ((el.matches?.(BUTTONISH_SEL) || looksLikeAdd(el)) && elementIsInteractive(el)) {
+        const disabled = el.hasAttribute?.("disabled") || String(el.getAttribute?.("aria-disabled") || "").toLowerCase() === "true";
         if (!disabled) return el;
       }
       el = el.parentElement;
@@ -541,77 +781,50 @@
     return !!actionEl && looksLikeAdd(actionEl);
   }
 
-  // ---------- in-page network hook (page context) ----------
-function injectInpageHook() {
-  // Only on hosts we trust for off-PDP adds (uniqlo/zara/mango/ebay)
-  if (!ALLOW_OFF_PDP_HOSTS.test(HOST)) return;
-
-  // Ask the service worker to inject our inpage hook into MAIN world.
-  try {
-    chrome.runtime.sendMessage({ action: "INJECT_INPAGE_HOOK" }, (res) => {
-      if (chrome.runtime.lastError) {
-        log("executeScript messaging error; falling back to <script src>", chrome.runtime.lastError.message);
-        return fallbackTag();
-      }
-      if (res && res.ok) {
-        log("in-page hook injected via chrome.scripting.executeScript");
-      } else {
-        log("executeScript returned non-ok; falling back to <script src>", res?.error);
-        fallbackTag();
-      }
-    });
-  } catch (e) {
-    log("executeScript call threw; falling back to <script src>", e);
-    fallbackTag();
-  }
-
-  // Fallback: add a non-inline <script src="chrome-extension://...">.
-  // This will work on sites that allow the extension scheme in their CSP.
-  function fallbackTag() {
+  // ---------- in-page network hook ----------
+  function injectInpageHook() {
+    if (!ALLOW_OFF_PDP_HOSTS.test(HOST)) return;
     try {
-      const url = chrome.runtime.getURL("Inpage/pageHook.inpage.js");
-      const s = document.createElement("script");
-      s.src = url;
-      s.async = false;
-      (document.documentElement || document.head || document.body).appendChild(s);
-      // don't remove immediately; let it load
-      log("in-page hook injected via <script src>");
-    } catch (err) {
-      log("in-page hook fallback failed", err);
+      chrome.runtime.sendMessage({ action: "INJECT_INPAGE_HOOK" }, (res) => {
+        if (chrome.runtime.lastError) return fallbackTag();
+        if (!(res && res.ok)) fallbackTag();
+      });
+    } catch { fallbackTag(); }
+
+    function fallbackTag() {
+      try {
+        const url = chrome.runtime.getURL("Inpage/pageHook.inpage.js");
+        const s = document.createElement("script");
+        s.src = url; s.async = false;
+        (document.documentElement || document.head || document.body).appendChild(s);
+      } catch {}
     }
   }
-}
 
   window.addEventListener("message", (e) => {
     try {
       if (!e || !e.data || e.source !== window) return;
-      if (e.data.__UC_ADD_HIT) {
-        log("in-page add hit", e.data.url);
-        // On off-PDP hosts (UNIQLO etc), force a settled scrape.
-        setTimeout(sendSettledForced, 150);
-      }
+      if (e.data.__UC_ADD_HIT) setTimeout(sendSettledForced, 200);
     } catch {}
   });
 
-  // ---------- message nudges from background ----------
+  // ---------- message nudges ----------
   function handleNudge(msg) {
     if (!__UC_MODE.enabled) return;
-
-    const isAddTrig     = msg?.action === "ADD_TRIGGERED";
-    const isBroadcast   = msg?.action === "ADD_TRIGGERED_BROADCAST";
-    const isSfccNudge   = msg?.action === "SFCC_NETWORK_NUDGE";
+    const isAddTrig   = msg?.action === "ADD_TRIGGERED";
+    const isBroadcast = msg?.action === "ADD_TRIGGERED_BROADCAST";
+    const isSfccNudge = msg?.action === "SFCC_NETWORK_NUDGE";
     if (!isAddTrig && !isBroadcast && !isSfccNudge) return;
 
     if (isBroadcast) {
       const mhost = String(msg.host || "").toLowerCase();
-      if (mhost === "zara" && !/(\.|^)zara\.(com|net)$/.test(HOST)) return;
+      if (mhost === "zara"  && !/(\.|^)zara\.(com|net)$/.test(HOST)) return;
       if (mhost === "mango" && !/(\.|^)mango\.com$/.test(HOST) && !/(\.|^)shop\.mango\.com$/.test(HOST)) return;
+      if (mhost === "uniqlo"&& !/(\.|^)uniqlo\.com$/.test(HOST)) return;
+      if (mhost === "gilt"  && !/(\.|^)gilt\.com$/.test(HOST)) return;
     }
 
-    if (IS_AMAZON && !amzClickedRecently()) {
-      log("ignore nudge (amazon, no recent add click)");
-      return;
-    }
+    if (IS_AMAZON && !amzClickedRecently()) return;
 
     setTimeout(() => {
       const allowOff = ALLOW_OFF_PDP_HOSTS.test(HOST);
@@ -623,14 +836,25 @@ function injectInpageHook() {
   // ---------- wire/unwire ----------
   function handleClick(e) {
     if (!__UC_MODE.enabled) return;
-    if (ALLOW_OFF_PDP_HOSTS.test(HOST)) watchForCartIncrement(); // observe badge on any click
-    if (DISABLE_QUICK_HOSTS.test(HOST)) return;
-    if (isAddClick(e)) sendQuick();
+
+    if (ALLOW_OFF_PDP_HOSTS.test(HOST)) {
+      watchForCartIncrement();
+      watchMiniCartOpen(); // Zara drawer fallback
+    }
+
+    // Always follow real add-click with a settled send (even on noisy hosts)
+    if (isAddClick(e)) setTimeout(sendSettled, 60);
+
+    // Quick allowed on non-noisy hosts only
+    if (!DISABLE_QUICK_HOSTS.test(HOST) && isAddClick(e)) sendQuick();
   }
 
   function handleAfter() {
     if (!__UC_MODE.enabled) return;
-    if (ALLOW_OFF_PDP_HOSTS.test(HOST)) watchForCartIncrement();
+    if (ALLOW_OFF_PDP_HOSTS.test(HOST)) {
+      watchForCartIncrement();
+      watchMiniCartOpen();
+    }
   }
 
   function wireAll() {
@@ -639,7 +863,6 @@ function injectInpageHook() {
     for (const t of ["click", "submit", "pointerup", "touchend", "keydown"]) on(document, t, handleAfter, true);
     try { chrome.runtime?.onMessage?.addListener?.(handleNudge); } catch {}
     STATE.wired = true;
-    log("wired (shopping mode ON)");
   }
 
   function unwireAll() {
@@ -648,7 +871,6 @@ function injectInpageHook() {
     try { chrome.runtime?.onMessage?.removeListener?.(handleNudge); } catch {}
     resetFlags();
     STATE.wired = false;
-    log("unwired (shopping mode OFF)");
   }
 
   // ---------- SPA URL change watcher ----------
@@ -684,7 +906,7 @@ function injectInpageHook() {
     });
   } catch {}
 
-  // Inject page-context network hooks early for UNIQLO/Zara/Mango/eBay
+  // Inject in-page hook early for off-PDP hosts
   injectInpageHook();
 
   // ---------- Debug helpers ----------
@@ -719,7 +941,6 @@ function injectInpageHook() {
   }, 200);
   window.__UC_CART_COUNT = readCartLikeCount;
 
-  // Initial wire (if storage hasn't toggled it off yet)
   if (__UC_MODE.enabled && !STATE.wired) wireAll();
   log("loaded", { href: location.href, pdp: looksLikePDP(), host: HOST });
 })();

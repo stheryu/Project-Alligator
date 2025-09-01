@@ -4,7 +4,7 @@
   "version": "0.1.26",
   "description": "Aggregate shopping carts across sites into one dashboard.",
 
-  "permissions": ["storage", "webRequest"],
+  "permissions": ["storage", "webRequest", "scripting", "activeTab"],
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.ebay.com/*",
@@ -20,6 +20,7 @@
     "*://shop.mango.com/*",
     "*://*.theoutnet.com/*",
     "*://*.jcrew.com/*",
+    "https://ocapi.jcrew.com/*",
     "*://*.jcrewfactory.com/*",
     "*://*.abercrombie.com/*",
     "*://*.hollisterco.com/*",
@@ -27,8 +28,9 @@
     "*://*.kith.com/*",
     "*://*.sophiebuhai.com/*",
     "*://*.myshopify.com/*",
-    "*://*.uniqlo.com/*"
-
+    "*://*.uniqlo.com/*",
+    "*://*.gilt.com/*",
+    "*://*.ruelala.com/*"
   ],
 
   "background": { "service_worker": "background.js" },

@@ -3,8 +3,11 @@
 
 (() => {
   const VERSION = "0.4.7";
-  const DEBUG = true;
-  const log = (...a) => { if (DEBUG) try { console.log("[UnifiedCart]", ...a); } catch {} };
+  // at the top of background.js
+  const DEBUG = true; // flip to false to quiet non-error logs
+  const log      = DEBUG ? (...a) => console.log("[UnifiedCart]", ...a) : () => {};
+const logWarn  = DEBUG ? (...a) => console.warn("[UnifiedCart]", ...a) : () => {};
+const logError = (...a) => console.error("[UnifiedCart]", ...a); // keep errors always-on
   const str = (x) => (x == null ? "" : String(x));
   const ENABLE_NOTIFICATIONS = false;
 
@@ -543,43 +546,61 @@
         ["requestBody"]
       );
 
-      // ---------- UNIQLO ----------
-      const RE_UNIQLO_HOST       = /(\.|^)uniqlo\.com$/i;
-      const RE_UNIQLO_ADD_PATH   = /\/(?:(?:api\/(?:commerce|internal)\/[^/]+\/)?cart(?:s)?|basket|bag)\/(?:add|add-item|addItem|items?|lines|line-items|insert|insert-or-update)\b/i;
-      const RE_UNIQLO_GRAPHQL    = /\/graphql\b/i;
-      const RE_UNIQLO_GQL_TOKENS = /\b(addToCart|addBagItem|addToBasket|addCartItem|addItemToCart|cartLinesAdd|cartAdd)\b/i;
+     // ---------- UNIQLO (incl. elgnisolqinu/fastretailing; SW-safe) ----------
+const RE_UNIQLO_HOST       = /(\.|^)(uniqlo|elgnisolqinu|fastretailing)\.com$/i;
+const RE_UNIQLO_ADD_PATH   = /\/(?:(?:api\/(?:commerce|internal)\/[^/]+\/)?cart(?:s)?|basket|bag)\/(?:add|add-item|addItem|items?|lines|line-items|insert|insert-or-update)\b/i;
+const RE_UNIQLO_GRAPHQL    = /\/graphql\b/i;
+const RE_UNIQLO_GQL_TOKENS = /\b(addToCart|addBagItem|addToBasket|addCartItem|addItemToCart|cartLinesAdd|cartAdd)\b/i;
 
-      chrome.webRequest.onBeforeRequest.addListener(
-        (details) => {
-          try {
-            if (!SHOPPING_MODE) return;
+function decodeBody(req) {
+  try {
+    if (req.requestBody?.formData) return JSON.stringify(req.requestBody.formData);
+    const raw = req.requestBody?.raw?.[0]?.bytes;
+    if (raw) return new TextDecoder("utf-8").decode(raw);
+  } catch {}
+  return "";
+}
 
-            const method = (details.method || "").toUpperCase();
-            if (!(method === "POST" || method === "PUT" || method === "PATCH")) return;
+function nudgeUniqloTabsAny(tabIdMaybe) {
+  const send = (id) => safeTabsSendMessage(id, { action: "ADD_TRIGGERED_BROADCAST", host: "uniqlo" }, { frameId: 0 });
+  if (typeof tabIdMaybe === "number" && tabIdMaybe >= 0) { send(tabIdMaybe); return; }
+  try {
+    chrome.tabs.query({ url: ["*://*.uniqlo.com/*"] }, (tabs) => {
+      for (const t of tabs || []) send(t.id);
+    });
+  } catch {}
+}
 
-            const u = String(details.url || "");
-            let host = "";
-            try { host = new URL(u).hostname; } catch {}
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    try {
+      if (!SHOPPING_MODE) return;
 
-            if (!RE_UNIQLO_HOST.test(host)) return;
+      const method = (details.method || "").toUpperCase();
+      if (!(method === "POST" || method === "PUT" || method === "PATCH")) return;
 
-            let isAdd = RE_UNIQLO_ADD_PATH.test(u);
-            if (!isAdd && RE_UNIQLO_GRAPHQL.test(u)) {
-              const bodyStr = (() => { try { return decodeBody(details); } catch { return ""; } })();
-              if (RE_UNIQLO_GQL_TOKENS.test(bodyStr)) isAdd = true;
-            }
-            if (!isAdd) return;
+      const url = String(details.url || "");
+      let host = "";
+      try { host = new URL(url).hostname; } catch {}
+      if (!RE_UNIQLO_HOST.test(host)) return;
 
-            const tabId = details.tabId;
-            if (tabId >= 0 && shouldNudge(tabId)) {
-              log("webRequest assist (UNIQLO) hit:", u);
-              retryAddTriggered(tabId, u);
-            }
-          } catch {}
-        },
-        { urls: ["*://*.uniqlo.com/*"], types: ["xmlhttprequest","ping","sub_frame","main_frame","other"] },
-        ["requestBody"]
-      );
+      // Path hit OR GraphQL op-name in body
+      let isAdd = RE_UNIQLO_ADD_PATH.test(url);
+      if (!isAdd && RE_UNIQLO_GRAPHQL.test(url)) {
+        const bodyStr = decodeBody(details);
+        if (RE_UNIQLO_GQL_TOKENS.test(bodyStr)) isAdd = true;
+      }
+      if (!isAdd) return;
+
+      log("webRequest assist (UNIQLO) hit:", url, "tabId:", details.tabId);
+      nudgeUniqloTabsAny(details.tabId);       // <- handles tabId === -1 too
+      // optional: keep your old retry pattern as a secondary nudge
+      // if (details.tabId >= 0 && shouldNudge(details.tabId)) retryAddTriggered(details.tabId, url);
+    } catch {}
+  },
+  { urls: ["*://*.uniqlo.com/*"], types: ["xmlhttprequest", "ping"] },
+  ["requestBody"]
+);
 
       log("webRequest assist active (SFCC/eBay/Zara/Mango/UNIQLO)");
     }
