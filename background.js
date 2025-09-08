@@ -1,8 +1,8 @@
 // background.js — Unified Cart (MV3)
-// v0.4.8  (MV3-safe; single decodeRequestBody; single INJECT_INPAGE_HOOK handler)
+// v0.4.9  (MV3-safe; single decodeRequestBody; single INJECT_INPAGE_HOOK handler)
 
 (() => {
-  const VERSION = "0.4.8";
+  const VERSION = "0.4.9";
 
   // ---- logging -------------------------------------------------------------
   const DEBUG = true; // flip to false to quiet non-error logs
@@ -132,7 +132,7 @@
   function isZaraPDP(link) {
     try {
       const { hostname, pathname } = new URL(link);
-      if (!/(\.|^)zara\.com$/i.test(hostname)) return true;
+      if (!/(\.|^)zara\.(com|net)$/i.test(hostname)) return true; // <- include .net
       return /-p\d+(?:\.html|$)/i.test(pathname);
     } catch { return true; }
   }
@@ -141,7 +141,7 @@
     if (!L) return true;
     if (L.includes(".amazon.com"))  return isAmazonPDP(link);
     if (L.includes(".walmart.com")) return isWalmartPDP(link);
-    if (L.includes(".zara.com"))    return isZaraPDP(link);
+    if (L.includes(".zara.com") || L.includes(".zara.net")) return isZaraPDP(link); // <- include .net
     return true;
   }
 
@@ -156,6 +156,13 @@
       }
       return true;
     } catch { return true; }
+  }
+
+  // Off-PDP allow-list for quick-add flows
+  const OFF_PDP_HOSTS = /(\.|^)(uniqlo|zara|mango|ebay|gilt|ruelala|brooklinen|mytheresa)\.(com|net)$/i;
+  function isOffPdpAllowed(link) {
+    try { return OFF_PDP_HOSTS.test(new URL(String(link||"")).hostname.toLowerCase()); }
+    catch { return false; }
   }
 
   // ---- throttles & nudges --------------------------------------------------
@@ -202,6 +209,32 @@
         safeTabsSendMessage(tabId, { action: "ADD_TRIGGERED", via: "webRequest", url }, { frameId: 0 });
       }, d);
     }
+  }
+
+  // ---- helpers used in multiple places ------------------------------------
+  function decodeRequestBody(details) {
+    try {
+      const rb = details.requestBody;
+      if (!rb) return "";
+      if (rb.formData) {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(rb.formData)) {
+          params.set(k, Array.isArray(v) ? v[0] : v);
+        }
+        return params.toString();
+      }
+      const raw = rb.raw?.[0]?.bytes;
+      if (raw) return new TextDecoder("utf-8").decode(raw);
+    } catch {}
+    return "";
+  }
+
+  async function loadCart() {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.sync.get({ cart: [] }, ({ cart }) => resolve(Array.isArray(cart) ? cart : []));
+      } catch { resolve([]); }
+    });
   }
 
   // ---- ONE message listener (includes inpage injection) --------------------
@@ -257,81 +290,58 @@
         return;
       }
 
+      // ADD_ITEM (fresh read–modify–write to avoid MV3 wipes)
       if (msg?.action === "ADD_ITEM" && msg.item) {
-        if (!SHOPPING_MODE) { try { sendResponse({ ok: true, ignored: true, reason: "mode_off" }); } catch {}; return; }
+        (async () => {
+          if (!SHOPPING_MODE) { try { sendResponse({ ok: true, ignored: true, reason: "mode_off" }); } catch {}; return; }
 
-        const item = sanitizeItem(msg.item);
-        if (looksLikeNoise(item)) { try { sendResponse({ ok: true, ignored: true, reason: "noise" }); } catch {}; return; }
-        if (item.link && !isLikelyProductUrl(item.link) && msg.source !== "sfcc") {
-          try { sendResponse({ ok: true, ignored: true, reason: "non_pdp" }); } catch {}; return;
-        }
-        if (!passesPDPGuards(item.link)) { try { sendResponse({ ok: true, ignored: true, reason: "guard" }); } catch {}; return; }
+          const current = await loadCart();
+          const item = sanitizeItem(msg.item);
+          if (looksLikeNoise(item)) { try { sendResponse({ ok: true, ignored: true, reason: "noise" }); } catch {}; return; }
 
-        const keyId = str(item.id);
-        const keyLink = str(item.link);
-        const key = (keyId || keyLink).toLowerCase();
+          const offPdp = isOffPdpAllowed(item.link);
+          if (!isLikelyProductUrl(item.link) && !offPdp && msg.source !== "sfcc") {
+            try { sendResponse({ ok:true, ignored:true, reason:"non_pdp" }); } catch {};
+            return;
+          }
+          if (!offPdp && !passesPDPGuards(item.link)) {
+            try { sendResponse({ ok:true, ignored:true, reason:"guard" }); } catch {};
+            return;
+          }
 
-        CART = CART.filter(it =>
-          str(it.id).toLowerCase()   !== keyId.toLowerCase() &&
-          str(it.link).toLowerCase() !== keyLink.toLowerCase()
-        );
-        CART.push(item);
+          const keyId   = str(item.id).toLowerCase();
+          const keyLink = str(item.link).toLowerCase();
+          const next = current.filter(it =>
+            str(it.id).toLowerCase()   !== keyId &&
+            str(it.link).toLowerCase() !== keyLink
+          );
+          next.push(item);
 
-        safeRuntimeSendMessage({ action: "CART_UPDATED", items: CART, added: item, count: CART.length });
+          CART = next; // update in-memory copy too
 
-        const tabId = sender?.tab?.id;
-        const shouldToast = Number.isInteger(tabId) &&
-                            !seenRecently(recentKeyTime, key) &&
-                            !seenRecently(recentToastByTab, tabId);
-        if (shouldToast) {
-          safeTabsSendMessage(tabId, { action: "SHOW_TOAST", text: "Gotcha!", pos: "top-right" }, { frameId: 0 });
-          try {
-            chrome.action.setBadgeBackgroundColor({ color: "#058E3F" });
-            chrome.action.setBadgeText({ text: "✓" });
-            setTimeout(() => chrome.action.setBadgeText({ text: "" }), 1400);
-          } catch {}
-        }
+          safeRuntimeSendMessage({ action: "CART_UPDATED", items: next, added: item, count: next.length });
 
-        chrome.storage.sync.set({ cart: CART }, () => {
-          if (ENABLE_NOTIFICATIONS) {
+          const tabId = sender?.tab?.id;
+          if (Number.isInteger(tabId) && !seenRecently(recentToastByTab, tabId)) {
+            safeTabsSendMessage(tabId, { action: "SHOW_TOAST", text: "Gotcha!", pos: "top-right" }, { frameId: 0 });
             try {
-              chrome.notifications?.create?.({
-                type: "basic",
-                iconUrl: chrome.runtime.getURL("icons/icon48.png"),
-                title: "Item Added",
-                message: `${item.title || "Item"} added to your unified cart.`,
-                silent: true,
-              }, () => void chrome.runtime?.lastError);
+              chrome.action.setBadgeBackgroundColor({ color: "#058E3F" });
+              chrome.action.setBadgeText({ text: "✓" });
+              setTimeout(() => chrome.action.setBadgeText({ text: "" }), 1400);
             } catch {}
           }
-        });
 
-        try { sendResponse({ ok: true, saved: true, count: CART.length }); } catch {}
-        return;
+          chrome.storage.sync.set({ cart: next }, () => {
+            try { sendResponse({ ok: true, saved: true, count: next.length }); } catch {}
+          });
+        })();
+        return true; // keep channel open for async sendResponse
       }
     } catch (e) {
       logError("background error:", e);
       try { sendResponse({ ok: false, error: String(e) }); } catch {}
     }
   });
-
-  // ---- webRequest helpers --------------------------------------------------
-  function decodeRequestBody(details) {
-    try {
-      const rb = details.requestBody;
-      if (!rb) return "";
-      if (rb.formData) {
-        const params = new URLSearchParams();
-        for (const [k, v] of Object.entries(rb.formData)) {
-          params.set(k, Array.isArray(v) ? v[0] : v);
-        }
-        return params.toString();
-      }
-      const raw = rb.raw?.[0]?.bytes;
-      if (raw) return new TextDecoder("utf-8").decode(raw);
-    } catch {}
-    return "";
-  }
 
   // ---- webRequest listeners (SFCC/eBay/Zara/Mango/UNIQLO) -----------------
   try {
@@ -565,41 +575,42 @@
       );
 
       // ---------- UNIQLO (uniqlo / fastretailing / elgnisolqinu) ----------
-      const RE_UNIQLO_HOST       = /(\.|^)(uniqlo|fastretailing|elgnisolqinu)\.com$/i;
-      const RE_UNIQLO_ADD_PATH   = /\/(?:(?:api\/(?:commerce|internal)\/[^/]+\/)?cart(?:s)?|basket|bag)\/(?:add|add-item|addItem|items?|lines|line-items|insert|insert-or-update)\b/i;
-      const RE_UNIQLO_GRAPHQL    = /\/graphql\b/i;
-      const RE_UNIQLO_GQL_TOKENS = /\b(addToCart|addBagItem|addToBasket|addCartItem|addItemToCart|cartLinesAdd|cartAdd)\b/i;
+const RE_UNIQLO_HOST = /(\.|^)(uniqlo|fastretailing|elgnisolqinu)\.com$/i;
 
-      function decodeRequestBody(details) {
+// Catch more server patterns: cart/cartline/cart-lines/cartlines/basket/bag + verbs
+const RE_UNIQLO_ADD_PATH =
+  /\/(?:(?:api\/(?:commerce|internal|v\d+)\/[^/]+\/)?(?:cart(?:s)?|basket|bag|cart-?line(?:s)?|cartlines?))\/(?:add(?:-item|Item|ToCart)?|add-item|addItem|items?|lines?|line-items?|insert|insert-or-update|create|update)\b/i;
+
+// GraphQL fallback (operation name matches)
+const RE_UNIQLO_GRAPHQL    = /\/graphql\b/i;
+const RE_UNIQLO_GQL_TOKENS = /\b(addToCart|addBagItem|addToBasket|addCartItem|addItemToCart|cartLinesAdd|cartAdd)\b/i;
+
+function nudgeUniqloTabsAny(tabIdMaybe) {
+  const send = (id) =>
+    chrome.tabs.sendMessage(
+      id,
+      { action: "ADD_TRIGGERED_BROADCAST", host: "uniqlo" },
+      { frameId: 0 },
+      () => void chrome.runtime?.lastError
+    );
+  if (typeof tabIdMaybe === "number" && tabIdMaybe >= 0) { send(tabIdMaybe); return; }
   try {
-    const rb = details.requestBody;
-    if (!rb) return "";
-    if (rb.formData) return JSON.stringify(rb.formData);
-    const raw = rb.raw?.[0]?.bytes;
-    if (raw) return new TextDecoder("utf-8").decode(raw);
+    chrome.tabs.query({ url: ["*://*.uniqlo.com/*", "*://*.fastretailing.com/*", "*://*.elgnisolqinu.com/*"] },
+      (tabs) => (tabs || []).forEach(t => send(t.id)));
   } catch {}
-  return "";
-      }
+}
 
-      function nudgeUniqloTabsAny(tabIdMaybe) {
-      const send = (id) =>
-      chrome.tabs.sendMessage(id, { action: "ADD_TRIGGERED_BROADCAST", host: "uniqlo" }, { frameId: 0 }, () => void chrome.runtime?.lastError);
-      if (typeof tabIdMaybe === "number" && tabIdMaybe >= 0) { send(tabIdMaybe); return; }
-      try { chrome.tabs.query({ url: ["*://*.uniqlo.com/*"] }, (tabs) => (tabs||[]).forEach(t => send(t.id))); } catch {}
-      }
-
-      chrome.webRequest.onBeforeRequest.addListener(
-      (details) => {
-        try {
-         if (!SHOPPING_MODE) return;
-          const m = (details.method || "").toUpperCase();
-          if (!(m === "POST" || m === "PUT" || m === "PATCH")) return;
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    try {
+      if (!SHOPPING_MODE) return;
+      const m = (details.method || "").toUpperCase();
+      if (!(m === "POST" || m === "PUT" || m === "PATCH")) return;
 
       const url = String(details.url || "");
       let host = ""; try { host = new URL(url).hostname; } catch {}
       if (!RE_UNIQLO_HOST.test(host)) return;
 
-      // Path match OR GraphQL operation name in body
       let isAdd = RE_UNIQLO_ADD_PATH.test(url);
       if (!isAdd && RE_UNIQLO_GRAPHQL.test(url)) {
         const bodyStr = decodeRequestBody(details);
@@ -617,8 +628,8 @@
       "*://*.fastretailing.com/*",
       "*://*.elgnisolqinu.com/*"
     ],
-    // IMPORTANT: include "fetch" (and keep "other")
-      types: ["xmlhttprequest", "ping", "other", "sub_frame", "main_frame"]
+    // MV3-valid types only (no "fetch")
+    types: ["xmlhttprequest", "ping", "other", "sub_frame", "main_frame", "websocket"]
   },
   ["requestBody"]
 );

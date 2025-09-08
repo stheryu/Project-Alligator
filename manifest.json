@@ -8,7 +8,8 @@
     "storage",
     "webRequest",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
 
   "host_permissions": [
@@ -41,7 +42,10 @@
     "*://*.mytheresa.com/*",
     "*://*.bostongeneralstore.com/*",
     "*://*.fastretailing.com/*",
-    "*://*.elgnisolqinu.com/*"
+    "*://*.elgnisolqinu.com/*",
+    "*://store.moma.org/*",
+    "*://*.momastore.org/*",
+    "*://*.moma.org/*"
   ],
 
   "background": { "service_worker": "background.js" },
@@ -249,8 +253,6 @@
         "*://*/catalog*",
         "*://*/category*",
         "*://*/categories*",
-        "*://*/collection*",
-        "*://*/collections*",
         "*://*/help*",
         "*://*/privacy*",
         "*://*/terms*",
