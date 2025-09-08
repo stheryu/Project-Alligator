@@ -7,19 +7,20 @@
   const DEBUG = true;
   const log = (...a) => DEBUG && console.log("[UnifiedCart-Generic]", ...a);
 
-  const HOST      = location.hostname.toLowerCase();
-  const IS_GILT   = /(\.|^)(gilt|ruelala)\.com$/i.test(HOST);
-  const IS_ZARA   = /(\.|^)zara\.(com|net)$/i.test(HOST);
-  const IS_NIKE   = /(\.|^)nike\.com$/i.test(HOST);
-  const IS_AMAZON = /\bamazon\./i.test(HOST);
+  const HOST       = location.hostname.toLowerCase();
+  const IS_GILT    = /(\.|^)(gilt|ruelala)\.com$/i.test(HOST);
+  const IS_ZARA    = /(\.|^)zara\.(com|net)$/i.test(HOST);
+  const IS_NIKE    = /(\.|^)nike\.com$/i.test(HOST);
+  const IS_AMAZON  = /\bamazon\./i.test(HOST);
+  const IS_UNIQLO = /(\.|^)(uniqlo|elgnisolqinu|fastretailing)\.com$/i.test(HOST);
 
-  // “Quick” is noisy here → rely on settled-only for these
+  // “Quick” is noisy → rely on settled-only for these
   const DISABLE_QUICK_HOSTS =
     /(\.|^)(amazon|zara|mango|kith|theoutnet|gilt|ruelala|nike)\.(com|net)$/i;
 
-  // Off-PDP legit add flows
+  // Off-PDP legit add flows (inject in-page hook + allow settled adds)
   const ALLOW_OFF_PDP_HOSTS =
-    /(\.|^)uniqlo\.com$|(\.|^)zara\.(com|net)$|(\.|^)mango\.com$|(\.|^)ebay\.com$|(\.|^)gilt\.com$|(\.|^)ruelala\.com$/i;
+    /(\.|^)uniqlo\.com$|(\.|^)zara\.(com|net)$|(\.|^)mango\.com$|(\.|^)ebay\.com$|(\.|^)gilt\.com$|(\.|^)ruelala\.com$|(\.|^)brooklinen\.com$|(\.|^)mytheresa\.com$/i;
 
   // ---------- global state ----------
   const STATE = (window.__UC_GENERIC_STATE ||= {
@@ -72,11 +73,8 @@
   // price sanitation + noise filters
   const CUR_NUM_RE = /([$€£¥₹])\s*([0-9][\d.,]*)|(?:\b(USD|CAD|EUR|GBP|JPY|INR)\b)\s*([0-9][\d.,]*)|([0-9][\d.,]*)\s*\b(USD|CAD|EUR|GBP|JPY|INR)\b/i;
   const BNPL_RE = /(afterpay|klarna|affirm|sezzle|quadpay|zip\s*pay|shop\s*pay|paypal\s*pay|interest[-\s]?free|installments?|installment|per\s*(month|mo\.?|payment|installment)|\b\d+\s*(x|payments?)\s*of|\bpay\s+in\s+\d+)/i;
-  // Shipping-pass / membership promos (Rue/Gilt)
   const MEMBERSHIP_RE = /(rue\s*now|rue\s*unlimited|gilt\s*unlimited|unlimited\s*shipping|shipping\s*pass|membership|subscribe|trial|free\s*shipping\s*(?:year|every|today)?)/i;
-  // Labels that typically mean MSRP/list/original
   const LISTISH_RE = /\b(list|msrp|compare|original|was|before|strikethrough|tachado|prix\s*barré|precio\s*tachado)\b/i;
-  // Labels that typically mean “current / now / sale”
   const CURRENTISH_RE = /\b(now|our\s*price|current|sale|today|your\s*price|price\s*(?:now|today))\b/i;
 
   function priceToCents(text) {
@@ -126,7 +124,6 @@
       }
     }
     if (!pairs.length) return "";
-    // If any look “currentish”, restrict to those
     const currentish = pairs.filter(([t,c,el]) => isCurrentishNode(el) && !isListishNode(el));
     const nonList    = pairs.filter(([t,c,el]) => !isListishNode(el));
     const source = currentish.length ? currentish : (nonList.length ? nonList : pairs);
@@ -344,7 +341,7 @@
       .find(href => href && !looksLikePixel(href));
     if (preload) return preload;
 
-    // CSS background-image fallback (helps COS/Zara wrappers)
+    // CSS background-image fallback
     {
       const cands = document.querySelectorAll('.pdp, .product, .gallery, .media, [class*="image"], [class*="media"]');
       for (const el of cands) {
@@ -386,7 +383,7 @@
     const strong = pickBestPriceTokenFrom(strongSel.map(s => $(s, MAIN)), { preferMin:true, minCents:1500 /* dodge $9.99/$11.99 pass */ });
     if (isValidNonZeroPrice(strong)) return cleanPrice(strong);
 
-    // “Our price” SR anchor → nearby scan (prefer MIN to avoid list)
+    // “Our price” SR anchor → nearby scan (prefer MIN to avoid list/MSRP)
     const sr = Array.from($$('.screen-reader-only', MAIN)).find(el => /\bour price\b/i.test(el.textContent || ""));
     if (sr) {
       const scope = sr.parentElement || sr.closest("div,section,article,form") || MAIN;
@@ -438,8 +435,23 @@
         if (isValidNonZeroPrice(t)) return cleanPrice(t);
       }
     }
-    // 1b) Zara: micro + current
+
+    // 1b) Zara: favor selected size in action sheet if open
     if (IS_ZARA) {
+      // Action sheet open?
+      const sheet = $('.zds-action-sheet-swipeable-container--open', MAIN) || $('.zds-action-sheet-swipeable-container[aria-modal="true"]', MAIN);
+      if (sheet) {
+        const selectedRow =
+          sheet.querySelector('.size-selector-sizes-size--selected, [aria-pressed="true"], [aria-checked="true"], .is-selected, .selected') ||
+          sheet.querySelector('.size-selector-sizes__size'); // fallback to first
+        const priceNode =
+          selectedRow?.querySelector('[data-qa-id="price-container-current"] .money-amount__main, .price-current__amount .money-amount__main, .price-current .money-amount__main, .price__amount .money-amount__main, .price-current__amount, .price__amount, .money-amount__main');
+        if (priceNode) {
+          const t = token(priceNode.textContent || "");
+          if (isValidNonZeroPrice(t)) return cleanPrice(t);
+        }
+      }
+      // Micro + current-price fallback
       const micro = $('[itemprop="price"]', MAIN);
       if (micro) {
         const c = micro.getAttribute("content");
@@ -504,17 +516,20 @@
     }
 
     // 5) Scoped DOM heuristics near title / add button
-    const titleEl = $("h1,[itemprop='name']", MAIN) || MAIN;
+    const MAIN2 = MAIN;
+    const titleEl = $("h1,[itemprop='name']", MAIN2) || MAIN2;
     const addBtn = $([
       "#add-to-cart-button","[data-action='add-to-cart']","button.add-to-cart",
       "[data-button-action='add-to-cart']","[data-add-to-cart]","[data-hook='add-to-cart']",
       "#product-addtocart-button","[data-role='tocart']","[name='add']","#add-to-bag","#add-to-cart",
-      // Zara/Nike patterns
+      // Zara/Nike/Uniqlo/Brooklinen patterns
       "[data-qa*='add-to-cart']","[data-qa*='addToCart']","[data-testid*='add-to-cart']",
+      "[data-test*='add-to-cart']","[data-cy*='add-to-cart']",
+      ".AddToCart__Button",".pdp-add-to-cart",
       "[aria-label*='add to cart' i]","[aria-label*='add to bag' i]"
-    ].join(","), MAIN);
+    ].join(","), MAIN2);
     const scopes = [
-      titleEl.closest("section, article, main, div, form") || MAIN,
+      titleEl.closest("section, article, main, div, form") || MAIN2,
       addBtn?.closest?.("section, article, main, div, form") || null
     ].filter(Boolean);
     for (const scope of scopes) {
@@ -527,7 +542,7 @@
     }
 
     // 6) Whole-page fallback
-    const preferMin = IS_ZARA || IS_NIKE; // sale < list; for Gilt we’ve already handled above
+    const preferMin = IS_ZARA || IS_NIKE; // sale < list
     const nodes = $$(
       '[data-testid*="price"],[data-test*="price"],[itemprop*="price"],[class*="price"],[id*="price"],.price,.product-price,.pdp-price,.sale-price,.member-price,span,div,b,strong,p'
     ).filter(el => !isBnplNode(el) && !isMembershipNode(el));
@@ -561,16 +576,19 @@
   const debounce = (k, ms) => { const now = Date.now(); if (k === lastKey && now - lastAt < ms) return false; lastKey = k; lastAt = now; return true; };
 
   function settleThenScrape(ms) {
-    const timeout = ms ?? (IS_GILT ? 2600 : (IS_NIKE || IS_ZARA) ? 1500 : 900);
+    // UNIQLO is slow to hydrate; give it more time
+    const timeout = ms ?? (IS_GILT ? 2600 : (IS_NIKE || IS_ZARA || IS_UNIQLO) ? 2500 : 900);
     const strictPrice = IS_GILT;
     return new Promise((resolve) => {
-      let done = false; const initial = buildItem();
+      let done = false;
+      let obs;
+      const initial = buildItem();
       const initialOk = strictPrice
         ? (isValidNonZeroPrice(initial.price) && initial.img)
         : (initial.price || initial.img);
       if (initialOk) return resolve(initial);
       const timer = setTimeout(() => { if (!done) { done = true; obs?.disconnect?.(); resolve(buildItem()); } }, timeout);
-      const obs = new MutationObserver(() => {
+      obs = new MutationObserver(() => {
         if (done) return;
         const item = buildItem();
         const ok = strictPrice ? (isValidNonZeroPrice(item.price) && item.img) : (item.price || item.img);
@@ -623,12 +641,18 @@
     const selectors = [
       '[data-testid*="cart"]','[data-test*="cart"]','[aria-label*="cart"]','[id*="cart"]','[class*="cart"]',
       '[data-testid*="bag"]','[data-test*="bag"]','[aria-label*="bag"]','[id*="bag"]','[class*="bag"]',
-      '[data-testid*="basket"]','[data-test*="basket"]','[aria-label*="basket"]','[id*="basket"]','[class*="basket"]'
+      '[data-testid*="basket"]','[data-test*="basket"]','[aria-label*="basket"]','[id*="basket"]','[class*="basket"]',
+      '#headerCartCount','#cart-qty','#cart-quantity',
+      '[data-cart-count]','[data-qa*="cart-count"]','[class*="cart-count"]','[id*="cartCount"]','[id*="CartCount"]'
     ].join(',');
     const nodes = $$(selectors);
     let best = null;
     for (const el of nodes) {
-      const s = ((el.getAttribute?.("aria-label") || "") + " " + (el.textContent || "")).trim();
+      const s = (
+        (el.getAttribute?.("data-cart-count") || "") + " " +
+        (el.getAttribute?.("aria-label") || "") + " " +
+        (el.textContent || "")
+      ).trim();
       const m = s.match(/(\d{1,3})/g);
       if (m && m.length) {
         const n = parseInt(m[m.length - 1], 10);
@@ -656,7 +680,9 @@
   function watchMiniCartOpen(windowMs = 2500) {
     const start = Date.now();
     const obs = new MutationObserver(() => {
-      const panel = document.querySelector('[data-qa*="mini-cart"],[data-testid*="mini-cart"],[id*="mini-cart"],[class*="mini-cart"],[class*="cart-drawer"]');
+      const panel = document.querySelector(
+        '[data-qa*="mini-cart"],[data-testid*="mini-cart"],[id*="mini-cart"],[class*="mini-cart"],[class*="cart-drawer"],[data-test*="mini-cart"],[data-cy*="mini-cart"]'
+      );
       if (panel && (panel.offsetParent !== null || getComputedStyle(panel).visibility !== "hidden")) {
         obs.disconnect();
         sendSettledForced();
@@ -676,8 +702,10 @@
     "#product-addtocart-button","[data-role='tocart']",
     "[name='add']","#add-to-bag","#add-to-cart",
     "[data-testid*='add']","[data-test*='add']","[data-qa*='add']",
-    // Zara/Nike explicit hooks
+    // Zara/Nike/Uniqlo/Brooklinen patterns
     "[data-qa*='add-to-cart']","[data-qa*='addToCart']","[data-testid*='add-to-cart']",
+    "[data-test*='add-to-cart']","[data-cy*='add-to-cart']",
+    ".AddToCart__Button",".pdp-add-to-cart",
     "[aria-label*='add to cart' i]","[aria-label*='add to bag' i]"
   ].join(",");
 
@@ -758,11 +786,10 @@
     return false;
   }
 
-  // IMPORTANT FIX: don’t bail just because an *ancestor* is variant UI
   function closestActionEl(start) {
     const startEl = start && start.nodeType === 1 ? start : start?.parentElement || null;
     if (!startEl) return null;
-    if (isVariantUI(startEl)) return null; // only bail if the *clicked node itself* is variant UI
+    if (isVariantUI(startEl)) return null; // only bail if the clicked node itself is variant UI
     let el = startEl;
     for (let i = 0; i < 20 && el; i++) {
       if ((el.matches?.(BUTTONISH_SEL) || looksLikeAdd(el)) && elementIsInteractive(el)) {
@@ -801,10 +828,14 @@
     }
   }
 
+  // NOTE: updated to listen for the new inpage payload shape
   window.addEventListener("message", (e) => {
     try {
       if (!e || !e.data || e.source !== window) return;
-      if (e.data.__UC_ADD_HIT) setTimeout(sendSettledForced, 200);
+      const d = e.data;
+      if (d.__UC_ADD_HIT || (d.source === "UnifiedCartPage" && d.type === "ADD_EVENT")) {
+        setTimeout(sendSettledForced, 200);
+      }
     } catch {}
   });
 
@@ -818,10 +849,10 @@
 
     if (isBroadcast) {
       const mhost = String(msg.host || "").toLowerCase();
-      if (mhost === "zara"  && !/(\.|^)zara\.(com|net)$/.test(HOST)) return;
-      if (mhost === "mango" && !/(\.|^)mango\.com$/.test(HOST) && !/(\.|^)shop\.mango\.com$/.test(HOST)) return;
-      if (mhost === "uniqlo"&& !/(\.|^)uniqlo\.com$/.test(HOST)) return;
-      if (mhost === "gilt"  && !/(\.|^)gilt\.com$/.test(HOST)) return;
+      if (mhost === "zara"   && !/(\.|^)zara\.(com|net)$/.test(HOST)) return;
+      if (mhost === "mango"  && !/(\.|^)mango\.com$/.test(HOST) && !/(\.|^)shop\.mango\.com$/.test(HOST)) return;
+      if (mhost === "uniqlo" && !/(\.|^)uniqlo\.com$/.test(HOST)) return;
+      if (mhost === "gilt"   && !/(\.|^)gilt\.com$/.test(HOST)) return;
     }
 
     if (IS_AMAZON && !amzClickedRecently()) return;
@@ -831,6 +862,11 @@
       if (allowOff && !looksLikePDP()) sendSettledForced();
       else sendSettled();
     }, 200);
+
+    // UNIQLO extra retry (slow hydration)
+    if (IS_UNIQLO) {
+      setTimeout(() => { if (!sentSettled) sendSettledForced(); }, 1800);
+    }
   }
 
   // ---------- wire/unwire ----------
@@ -839,7 +875,7 @@
 
     if (ALLOW_OFF_PDP_HOSTS.test(HOST)) {
       watchForCartIncrement();
-      watchMiniCartOpen(); // Zara drawer fallback
+      watchMiniCartOpen(); // off-PDP + drawer fallback
     }
 
     // Always follow real add-click with a settled send (even on noisy hosts)

@@ -4,7 +4,13 @@
   "version": "0.1.26",
   "description": "Aggregate shopping carts across sites into one dashboard.",
 
-  "permissions": ["storage", "webRequest", "scripting", "activeTab"],
+  "permissions": [
+    "storage",
+    "webRequest",
+    "scripting",
+    "activeTab"
+  ],
+
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.ebay.com/*",
@@ -30,7 +36,12 @@
     "*://*.myshopify.com/*",
     "*://*.uniqlo.com/*",
     "*://*.gilt.com/*",
-    "*://*.ruelala.com/*"
+    "*://*.ruelala.com/*",
+    "*://*.brooklinen.com/*",
+    "*://*.mytheresa.com/*",
+    "*://*.bostongeneralstore.com/*",
+    "*://*.fastretailing.com/*",
+    "*://*.elgnisolqinu.com/*"
   ],
 
   "background": { "service_worker": "background.js" },
@@ -79,7 +90,6 @@
       "run_at": "document_idle",
       "all_frames": true
     },
-
     {
       "matches": ["*://*.amazon.com/*"],
       "js": [
@@ -90,7 +100,6 @@
       "run_at": "document_start",
       "all_frames": true
     },
-
     {
       "matches": ["*://*.walmart.com/*"],
       "js": [
@@ -100,7 +109,6 @@
       "run_at": "document_idle",
       "all_frames": false
     },
-
     {
       "matches": ["*://*.zara.com/*"],
       "js": [
@@ -111,7 +119,6 @@
       "run_at": "document_start",
       "all_frames": true
     },
-
     {
       "matches": ["*://shop.mango.com/*", "*://*.mango.com/*"],
       "js": [
@@ -122,7 +129,6 @@
       "run_at": "document_start",
       "all_frames": true
     },
-
     {
       "matches": ["*://*.ebay.com/*"],
       "js": [
@@ -132,7 +138,6 @@
       "run_at": "document_idle",
       "all_frames": true
     },
-
     {
       "matches": ["*://*.net-a-porter.com/*"],
       "js": [
@@ -142,7 +147,6 @@
       "run_at": "document_idle",
       "all_frames": false
     },
-
     {
       "matches": ["*://*.dwr.com/*"],
       "js": [
@@ -154,7 +158,6 @@
       "run_at": "document_start",
       "all_frames": true
     },
-
     {
       "matches": ["*://*.bergdorfgoodman.com/*"],
       "js": [
@@ -166,7 +169,6 @@
       "run_at": "document_start",
       "all_frames": true
     },
-
     {
       "matches": ["*://*.theoutnet.com/*"],
       "js": [
@@ -177,7 +179,6 @@
       "run_at": "document_start",
       "all_frames": true
     },
-
     {
       "matches": [
         "*://*.jcrew.com/*",
@@ -195,7 +196,6 @@
       "run_at": "document_start",
       "all_frames": true
     },
-
     {
       "matches": ["*://*.kith.com/*", "*://*.myshopify.com/*"],
       "js": [
@@ -211,7 +211,6 @@
       "run_at": "document_start",
       "all_frames": true
     },
-
     {
       "matches": ["*://*.sophiebuhai.com/*"],
       "js": [
@@ -222,23 +221,21 @@
       "all_frames": true
     },
     {
-    "matches": ["*://*.sophiebuhai.com/*"],
-    "js": ["content-scripts/toastListener.js"],
-    "run_at": "document_start",
-    "all_frames": true
+      "matches": ["*://*.sophiebuhai.com/*"],
+      "js": ["content-scripts/toastListener.js"],
+      "run_at": "document_start",
+      "all_frames": true
     },
-
     {
-    "matches": ["*://*.uniqlo.com/*"],
-    "js": [
-      "content-scripts/pageBridge.js",
-      "content-scripts/genericAddListener.js",
-      "content-scripts/toastListener.js"
-    ],
-    "run_at": "document_start",
-    "all_frames": true
-    }, 
-
+      "matches": ["*://*.uniqlo.com/*"],
+      "js": [
+        "content-scripts/pageBridge.js",
+        "content-scripts/genericAddListener.js",
+        "content-scripts/toastListener.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
     {
       "matches": ["*://*/*"],
       "exclude_matches": [
