@@ -60,7 +60,9 @@
     "abercrombie kids": "Abercrombie Kids",
     "hollister": "Hollister",
     "hollisterco": "Hollister",
-    "uniqlo": "Uniqlo"
+    "uniqlo": "Uniqlo",
+    "dwr": "Design Within Reach",
+    "design within reach": "Design Within Reach"
   };
 
   function inferBrandFromLink(link) {
@@ -73,6 +75,7 @@
       if (host.endsWith("hollisterco.com")) return "Hollister";
       if (host.endsWith("anf.com")) return "Abercrombie";
       if (host.endsWith("uniqlo.com")) return "Uniqlo";
+      if (host.endsWith("dwr.com")) return "Design Within Reach";
     } catch {}
     return "";
   }
@@ -159,7 +162,7 @@
   }
 
   // Off-PDP allow-list for quick-add flows
-  const OFF_PDP_HOSTS = /(\.|^)(uniqlo|zara|mango|ebay|gilt|ruelala|brooklinen|mytheresa)\.(com|net)$/i;
+  const OFF_PDP_HOSTS = /(\.|^)(uniqlo|zara|mango|ebay|gilt|ruelala|brooklinen|mytheresa|dwr)\.(com|net)$/i;
   function isOffPdpAllowed(link) {
     try { return OFF_PDP_HOSTS.test(new URL(String(link||"")).hostname.toLowerCase()); }
     catch { return false; }
@@ -348,7 +351,7 @@
     if (chrome.webRequest?.onBeforeRequest?.addListener) {
 
       // ---------- SFCC (Demandware) + A&F BFF + J.Crew GraphQL --------------
-      const RE_HOST_SFCC = /(\.|^)(jcrewfactory|jcrew|abercrombiekids|abercrombie|hollisterco|anf)\.com$/i;
+      const RE_HOST_SFCC = /(\.|^)(jcrewfactory|jcrew|abercrombiekids|abercrombie|hollisterco|anf|dwr)\.com$/i;
       const SFCC_URL_RE  = /\/on\/demandware\.store\/.*\/(?:Cart-(?:Add|AddMultiple)Product|AddToCart|ProductList-AddProduct)\b/i;
       const OCAPI_ADD_RE = /\/(?:s\/-\/)?dw\/shop\/v\d+(?:_\d+)?\/baskets\/[^/]+\/items\b/i;
       const SCAPI_ADD_RE = /\/api\/checkout\/v\d+(?:\.\d+)?\/baskets\/[^/]+(?:\/shipments\/[^/]+)?\/(?:items|line-items)\b/i;
@@ -468,7 +471,8 @@
             "*://*.abercrombie.com/*",
             "*://*.abercrombiekids.com/*",
             "*://*.hollisterco.com/*",
-            "*://*.anf.com/*"
+            "*://*.anf.com/*",
+            "*://*.dwr.com/*"
           ],
           types: ["xmlhttprequest","ping","sub_frame","main_frame","other"]
         },

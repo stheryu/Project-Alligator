@@ -20,7 +20,7 @@
 
   // Off-PDP legit add flows (inject in-page hook + allow settled adds)
   const ALLOW_OFF_PDP_HOSTS =
-    /(\.|^)(uniqlo|fastretailing|elgnisolqinu)\.com$|(\.|^)zara\.(com|net)$|(\.|^)mango\.com$|(\.|^)ebay\.com$|(\.|^)gilt\.com$|(\.|^)ruelala\.com$|(\.|^)brooklinen\.com$|(\.|^)mytheresa\.com$/i;
+    /(\.|^)dwr\.com$|(\.|^)uniqlo\.com$|(\.|^)zara\.(com|net)$|(\.|^)mango\.com$|(\.|^)ebay\.com$|(\.|^)gilt\.com$|(\.|^)ruelala\.com$|(\.|^)brooklinen\.com$|(\.|^)mytheresa\.com$/i;
 
   // ---------- global state ----------
   const STATE = (window.__UC_GENERIC_STATE ||= {
