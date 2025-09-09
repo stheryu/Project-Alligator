@@ -1,7 +1,9 @@
-/* popup.js — original 4-line card, right-side post-it tabs (10ch + ...),
-   working select-all, X-delete, Move To, in-popup Manage (Default undeletable)
-   + Manage modal now uses DRAFT (Done = save, Cancel/backdrop/X = discard)
-   + “New List” is an always-visible last row with textbox + Add button */
+/* popup.js — stable drop-in + DRAG-REORDER *inside Manage Lists*
+   - Side tabs unchanged (no drag); order reflects saved ORDER
+   - Manage Lists modal: drag rows to reorder (Default pinned, not draggable)
+   - Cancel (pink) discards changes; Done (green) saves; “X” hidden
+   - Original list/card behavior preserved
+*/
 (() => {
   // ---------- Logo ----------
   try {
@@ -25,26 +27,78 @@
   // Manage modal
   const manageModal = document.getElementById("manageModal");
   const manageList  = document.getElementById("manageList");
-  const manageClose = document.getElementById("manageClose");   // old “X” (we keep it, acts like Cancel)
-  const addListBtn  = document.getElementById("addList");
-  if (addListBtn) addListBtn.remove();
+  const manageClose = document.getElementById("manageClose"); // we hide this; Cancel replaces it
+  const addListBtn  = document.getElementById("addList");     // removed UI
   const doneManage  = document.getElementById("doneManage");
-  const modalFoot   = document.querySelector("#manageModal .modal-foot");
+  const modalFoot   = manageModal ? manageModal.querySelector(".modal-foot") : null;
+
+  // Ensure footer has Cancel (pink) + Done (green); hide X and remove legacy +New
+  if (manageClose) manageClose.style.display = "none";
+  if (addListBtn) addListBtn.remove();
+  if (modalFoot) {
+    // style Done green
+    if (doneManage) {
+      doneManage.classList.add("btn");
+      doneManage.style.background = "var(--green)";
+      doneManage.style.color = "#fff";
+      doneManage.style.borderColor = "var(--green)";
+      doneManage.style.fontWeight = "800";
+    }
+    // inject / restyle Cancel pink
+    let cancelManage = modalFoot.querySelector("#cancelManage");
+    if (!cancelManage) {
+      cancelManage = document.createElement("button");
+      cancelManage.id = "cancelManage";
+      cancelManage.className = "btn";
+      modalFoot.insertBefore(cancelManage, doneManage || null);
+    }
+    cancelManage.textContent = "Cancel";
+    cancelManage.style.background = "var(--pink)";
+    cancelManage.style.color = "#fff";
+    cancelManage.style.borderColor = "var(--pink)";
+    cancelManage.style.fontWeight = "800";
+  }
+  const cancelManageBtn = modalFoot ? modalFoot.querySelector("#cancelManage") : null;
 
   // ---------- State ----------
-  let LISTS = Object.create(null); // { listName: Item[] }
+  let LISTS = Object.create(null);   // { name: Item[] }
   let ACTIVE = "Default";
-  const selected = new Set();      // keys for ACTIVE list
+  let ORDER  = [];                   // ["Default", "Work", "Gifts", ...] for side tabs
+  const selected = new Set();
 
-  // DRAFT state for Manage modal (only committed on Done)
+  // Draft buffers while Manage is open
   let DRAFT = null;
+  let DRAFT_ORDER = null;
   let ACTIVE_DRAFT = null;
+  let manageDragWired = false;
+  let draggingRow = null;
+  let hintTarget  = null;
+  let hintBefore  = false;
+
+function clearRowHints(){
+  manageList.querySelectorAll(".manage-row").forEach(r=>{
+    r.classList.remove("drop-before","drop-after","dragging");
+  });
+  hintTarget = null; hintBefore = false;
+}
 
   // ---------- Helpers ----------
-  const keyOf = it => (String(it?.id || it?.link || "")).toLowerCase();
+  const keyOf = it => String(it?.id || it?.link || "").toLowerCase();
   const domainOf = (link="") => { try { return new URL(String(link)).hostname.replace(/^www\./,""); } catch { return ""; } };
-  const escapeHtml = s => String(s||"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const dedupe = (arr)=>{ const seen=new Set(), out=[]; for(const it of arr||[]){ const k=keyOf(it); if(k && !seen.has(k)){ seen.add(k); out.push(it); } } return out; };
+  const escapeHtml = s => String(s||"").replace(/[&<>"']/g, c => (
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;"
+  ));
+  const dedupe = (arr=[]) => { const seen=new Set(), out=[]; for(const it of arr){ const k=keyOf(it); if(k && !seen.has(k)){ seen.add(k); out.push(it); } } return out; };
+  const deepCopy = (obj) => JSON.parse(JSON.stringify(obj));
+
+  function ensureOrder(base = LISTS, order = ORDER){
+    const names = Object.keys(base);
+    const out = [];
+    if (names.includes("Default")) out.push("Default"); // pin first
+    (order||[]).forEach(n => { if (n !== "Default" && names.includes(n) && !out.includes(n)) out.push(n); });
+    names.forEach(n => { if (n !== "Default" && !out.includes(n)) out.push(n); });
+    return out;
+  }
 
   // price parsing for totals
   const CUR_SYM = { "$":"USD", "€":"EUR", "£":"GBP", "¥":"JPY", "₹":"INR" };
@@ -68,31 +122,39 @@
   // ---------- Storage ----------
   function loadAll(cb){
     try {
-      chrome.storage.sync.get({ uc_lists:null, uc_active:null, cart:[] }, (res)=>{
+      chrome.storage.sync.get({ uc_lists:null, uc_active:null, uc_order:null, cart:[] }, (res)=>{
         LISTS = res.uc_lists && typeof res.uc_lists==="object" ? res.uc_lists : { "Default": [] };
         if (!("Default" in LISTS)) LISTS["Default"] = LISTS["Default"] || [];
         ACTIVE = (typeof res.uc_active==="string" && res.uc_active in LISTS) ? res.uc_active : "Default";
-        // migrate legacy single cart
+        ORDER  = Array.isArray(res.uc_order) ? res.uc_order.slice() : [];
+        ORDER  = ensureOrder(LISTS, ORDER);
+
+        // migrate legacy cart
         const legacy = Array.isArray(res.cart) ? res.cart : [];
         if (legacy.length){
           LISTS[ACTIVE] = dedupe([...(LISTS[ACTIVE]||[]), ...legacy]);
           chrome.storage.sync.set({ uc_lists: LISTS, cart: [] }, ()=>cb?.());
         } else cb?.();
       });
-    } catch { LISTS = { "Default": [] }; ACTIVE="Default"; cb?.(); }
+    } catch {
+      LISTS = { "Default": [] }; ACTIVE="Default"; ORDER=["Default"]; cb?.();
+    }
   }
-  const saveLists = (cb)=> chrome.storage.sync.set({ uc_lists: LISTS, uc_active: ACTIVE }, cb);
+  const saveLists = (cb)=> chrome.storage.sync.set(
+    { uc_lists: LISTS, uc_active: ACTIVE, uc_order: ORDER },
+    cb
+  );
 
-  // ---------- Tabs (right-side “post-it”) ----------
+  // ---------- Tabs (no drag here; just render in ORDER) ----------
   const shortTab = (s) => {
-    const t = String(s || "");
-    const up = t.toUpperCase();
+    const up = String(s || "").toUpperCase();
     return up.length > 10 ? up.slice(0,10) + "..." : up;
   };
-
   function renderTabs(){
     tabsEl.innerHTML = "";
-    Object.keys(LISTS).forEach(name=>{
+    ORDER = ensureOrder(LISTS, ORDER);
+    ORDER.forEach(name=>{
+      if (!(name in LISTS)) return;
       const tab = document.createElement("div");
       tab.className = "tab" + (name===ACTIVE ? " active" : "");
       tab.title = name;
@@ -129,7 +191,7 @@
     deleteSelEl.disabled = selCount===0;
   }
 
-  // ---------- Render list (4-line card + price) ----------
+  // ---------- Render list ----------
   function renderList(){
     const items=LISTS[ACTIVE]||(LISTS[ACTIVE]=[]);
     listEl.innerHTML="";
@@ -217,44 +279,22 @@
 
   deleteSelEl.addEventListener("click", removeSelected);
 
-  // ---------- Move menu ----------
-function openMoveMenu(){
-  const names = Object.keys(LISTS);
-  moveMenu.innerHTML = [
-    ...names.map(n => `<div class="mi" data-name="${escapeHtml(n)}">${escapeHtml(n)}</div>`),
-    `<div class="mi manage" data-act="manage">Add/Manage Lists</div>`
-  ].join("");
-
-  // show so we can measure
-  moveMenu.hidden = false;
-
-  const btnRect = moveBtn.getBoundingClientRect();
-  const menuRect = moveMenu.getBoundingClientRect();
-  const vw = document.documentElement.clientWidth;
-  const vh = document.documentElement.clientHeight;
-
-  // place just below the button
-  let left = btnRect.left;
-  let top  = btnRect.bottom + 6;
-
-  // clamp horizontally so it stays inside the popup
-  if (left + menuRect.width > vw - 8) left = vw - 8 - menuRect.width;
-  if (left < 8) left = 8;
-
-  // if there's not enough space below, flip it above the button
-  if (top + menuRect.height > vh - 8) top = btnRect.top - 6 - menuRect.height;
-  if (top < 8) top = 8;
-
-  moveMenu.style.left = `${Math.round(left)}px`;
-  moveMenu.style.top  = `${Math.round(top)}px`;
-}
-
-function closeMoveMenu(){
-  moveMenu.hidden = true;
-  moveMenu.style.left = "-9999px";
-  moveMenu.style.top  = "-9999px";
-}
-
+  // ---------- Move menu (no + New; bold green Add/Manage) ----------
+  function openMoveMenu(){
+    const names=ensureOrder(LISTS, ORDER);
+    moveMenu.innerHTML = [
+      ...names.map(n=>`<div class="mi" data-name="${escapeHtml(n)}">${escapeHtml(n)}</div>`),
+      `<div class="mi manage" data-act="manage">Add/Manage Lists…</div>`
+    ].join("");
+    const r = moveBtn.getBoundingClientRect();
+    moveMenu.style.top  = Math.round(r.bottom + 6) + "px";
+    moveMenu.style.left = Math.round(r.left) + "px";
+    moveMenu.hidden=false;
+  }
+  function closeMoveMenu(){
+    moveMenu.hidden=true;
+    moveMenu.style.top="-9999px"; moveMenu.style.left="-9999px";
+  }
   moveBtn.addEventListener("click",(e)=>{
     e.stopPropagation();
     if (!moveMenu.hidden) { closeMoveMenu(); return; }
@@ -270,11 +310,6 @@ function closeMoveMenu(){
   moveMenu.addEventListener("click",(e)=>{
     const node=e.target.closest(".mi"); if(!node) return;
     const act=node.dataset.act||"";
-    if (act==="new"){
-      openManageModal(); // open modal; last row has textbox + Add
-      closeMoveMenu();
-      return;
-    }
     if (act==="manage"){
       closeMoveMenu();
       openManageModal();
@@ -284,57 +319,261 @@ function closeMoveMenu(){
     closeMoveMenu();
   });
 
-  // ---------- Manage lists modal (DRAFT; Default locked; inline Add row) ----------
+  // ---------- Manage lists (drag inside modal) ----------
+  function openManageModal(){
+    // seed drafts
+    DRAFT = deepCopy(LISTS);
+    DRAFT_ORDER = ensureOrder(DRAFT, ORDER);
+    ACTIVE_DRAFT = ACTIVE;
+    renderManageList();
+    if (manageModal) manageModal.hidden=false;
+  }
+  function closeManageModal(){ if (manageModal) manageModal.hidden=true; }
 
-  function initDraftIfNeeded(){
-    if (!DRAFT){
-      DRAFT = JSON.parse(JSON.stringify(LISTS));
-      ACTIVE_DRAFT = ACTIVE;
+  function rowHtml(name){
+    const isDefault = /^default$/i.test(name);
+    const actions = isDefault ? "" :
+      `<a class="link rn" style="color:#111;">Rename</a>
+       <a class="link rm" style="color:#B91C1C;">Delete</a>`;
+    const dragAttr = isDefault ? "" : ` draggable="true"`;
+    return `
+      <div class="manage-row" data-name="${escapeHtml(name)}" data-lock="${isDefault ? "1" : "0"}"${dragAttr}>
+        <div class="nm">${escapeHtml(name)}</div>
+        ${actions}
+      </div>`;
+  }
+
+  function renderManageList(){
+    if (!manageList) return;
+    const names = (DRAFT_ORDER || ensureOrder(DRAFT, ORDER)).filter(n => n in DRAFT);
+    manageList.innerHTML =
+      names.map(rowHtml).join("") +
+      `<div class="manage-row new-row" data-new="1">
+         <input class="rename-input new-name" placeholder="New list name" maxlength="48" style="width:220px;max-width:220px;" />
+         <a class="link new-add" style="color:#058E3F;font-weight:700;">Add</a>
+       </div>`;
+    wireManageDrag();
+  }
+
+  function getDraggableRows(){
+    // skip Default and the bottom "new-row"
+    return Array.from(manageList.querySelectorAll('.manage-row[draggable="true"]'));
+  }
+  function clearRowHints(){
+    manageList.querySelectorAll(".manage-row").forEach(r=>{
+      r.classList.remove("drop-before","drop-after","dragging");
+    });
+    hintTarget = null; hintBefore = false;
+  }
+  // Replace existing computeDropFromY with this:
+function computeDropFromY(clientY){
+  const rows = Array.from(manageList.querySelectorAll('.manage-row[draggable="true"]'));
+  if (!rows.length) return { target:null, before:false };
+
+  // If we're above the first draggable row's midline → "before first"
+  const firstRect = rows[0].getBoundingClientRect();
+  if (clientY < (firstRect.top + firstRect.height/2)) {
+    return { target: rows[0], before: true };
+  }
+
+  // Otherwise, find the first row whose midline is below the pointer
+  for (let i = 0; i < rows.length; i++){
+    const rect = rows[i].getBoundingClientRect();
+    if (clientY < (rect.top + rect.height/2)){
+      return { target: rows[i], before: true };
     }
   }
 
-  function renderManage(){
-    // rows from DRAFT; lock Default (no Rename/Delete)
-    const names = Object.keys(DRAFT);
-    const rows = names.map(n => {
-      const isDefault = /^default$/i.test(n);
-      const actions = isDefault
-        ? "" // no actions for Default
-        : `<a class="link rn" style="color:#111;">Rename</a>
-           <a class="link rm" style="color:#B91C1C;">Delete</a>`;
-      return `
-        <div class="manage-row" data-name="${escapeHtml(n)}" data-lock="${isDefault ? "1" : "0"}">
-          <div class="nm">${escapeHtml(n)}</div>
-          ${actions}
-        </div>`;
-    }).join("");
+  // Pointer is below all mids → after the last draggable row
+  return { target: rows[rows.length - 1], before: false };
+}
+  function wireManageDrag(){
+  // Wire per-row handlers (these rows are re-rendered each time)
+  Array.from(manageList.querySelectorAll('.manage-row[draggable="true"]')).forEach(row=>{
+    const name = row.dataset.name;
 
-    // Always-visible "New List" row at the end
-    const newRow = `
-      <div class="manage-row new-row" data-new="1">
-        <input class="rename-input new-name" placeholder="New list name" maxlength="48" style="width:220px;max-width:220px;" />
-        <a class="link new-add">Add</a>
-      </div>`;
+    row.addEventListener("dragstart",(e)=>{
+      draggingRow = name;
+      row.classList.add("dragging");
+      try {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", name);
+        // tiny transparent drag image to remove weird default ghosts
+        const ghost = document.createElement("canvas");
+        ghost.width = 1; ghost.height = 1;
+        e.dataTransfer.setDragImage(ghost, 0, 0);
+      } catch {}
+    });
 
-    manageList.innerHTML = rows + newRow;
+    row.addEventListener("dragend",()=>{
+      draggingRow = null;
+      clearRowHints();
+    });
 
-    // Hide the old “X” visually (still wired as Cancel)
-    if (manageClose) manageClose.style.display = "none";
+    // keep default prevented so drops are allowed
+    row.addEventListener("dragover",(e)=>{ e.preventDefault(); });
+    row.addEventListener("drop",(e)=>{ e.preventDefault(); }); // handled by container
+  });
 
-    // Footer buttons: ensure Cancel (pink) exists & is wired; style Done (green)
-    if (modalFoot){
-      let cancelBtn = document.getElementById("cancelManage");
-      if (!cancelBtn){
-        cancelBtn = document.createElement("button");
-        cancelBtn.id = "cancelManage";
-        cancelBtn.type = "button";
-        cancelBtn.textContent = "Cancel";
-        cancelBtn.style.cssText = "height:36px;padding:0 14px;border-radius:10px;border:1.5px solid var(--pink);background:var(--pink);color:#fff;font-weight:700;cursor:pointer;";
-        modalFoot.insertBefore(cancelBtn, modalFoot.firstChild);
+  // Attach container-level handlers ONLY ONCE
+  if (manageDragWired) return;
+  manageDragWired = true;
+
+  manageList.addEventListener("dragover",(e)=>{
+    if (!draggingRow) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = "move"; } catch {}
+
+    const { target, before } = computeDropFromY(e.clientY);
+    clearRowHints();
+    if (target){
+      hintTarget = target; hintBefore = before;
+      target.classList.add(before ? "drop-before" : "drop-after");
+    }
+  });
+
+  manageList.addEventListener("drop",(e)=>{
+    if (!draggingRow) return;
+    e.preventDefault();
+
+    // Recompute on drop to match the visible guide line exactly
+    let { target, before } = computeDropFromY(e.clientY);
+    clearRowHints();
+
+    const fromIdx = DRAFT_ORDER.indexOf(draggingRow);
+    if (fromIdx < 0) return;
+
+    // Compute insertion index in DRAFT_ORDER
+    let toIdx;
+    if (target){
+      const overName = target.dataset.name;
+      const overIdx  = DRAFT_ORDER.indexOf(overName);
+      if (overIdx < 0) return;
+      toIdx = before ? overIdx : overIdx + 1;
+    } else {
+      toIdx = DRAFT_ORDER.length; // append
+    }
+
+    // Never allow placing before index 0 (Default is pinned there)
+    if (toIdx <= 0) toIdx = 1;
+
+    // Standard remove-then-insert with forward-shift correction
+    const arr = DRAFT_ORDER.slice();
+    arr.splice(fromIdx, 1);
+    if (fromIdx < toIdx) toIdx -= 1;
+    if (toIdx === fromIdx) return;
+
+    arr.splice(toIdx, 0, draggingRow);
+    DRAFT_ORDER = arr;
+
+    // Re-render to reflect the new order
+    renderManageList();
+  });
+}
+
+  // clicks inside Manage: add / rename / delete
+  if (manageList){
+    manageList.addEventListener("click",(e)=>{
+      const row = e.target.closest(".manage-row");
+      if (!row) return;
+
+      // Add new
+      if (e.target.classList.contains("new-add")){
+        const inp = row.querySelector(".new-name");
+        const name = (inp && inp.value || "").trim();
+        if (!name) return;
+        if (DRAFT[name]) { alert("A list with that name already exists."); return; }
+        DRAFT[name] = [];
+        DRAFT_ORDER.push(name);
+        renderManageList();
+        return;
       }
-      // always (re)bind to be safe
-      cancelBtn.onclick = cancelManage;
 
-      if (doneManage){
-        doneManage.textContent = "Done";
-        doneManage.style.cssText = "height:36px;padding:0 14px;border-radius:10px;border:1.5px solid var(--green);background:var(--green);color:#fff;font-weight:700;cursor:
+      const name = row.dataset.name || "";
+      const isDefault = row.dataset.lock === "1" || /^default$/i.test(name);
+
+      // Delete
+      if (e.target.classList.contains("rm")){
+        if (isDefault) return;
+        if (confirm(`Delete list “${name}”?`)){
+          const wasActive = (name===ACTIVE_DRAFT);
+          delete DRAFT[name];
+          DRAFT_ORDER = DRAFT_ORDER.filter(n => n !== name);
+          if (wasActive){
+            ACTIVE_DRAFT = "Default";
+            if (!DRAFT["Default"]) DRAFT["Default"] = [];
+            if (!DRAFT_ORDER.includes("Default")) DRAFT_ORDER.unshift("Default");
+          }
+          renderManageList();
+        }
+        return;
+      }
+
+      // Rename
+      if (e.target.classList.contains("rn")){
+        if (isDefault) return;
+        const nm = row.querySelector(".nm");
+        const original = name;
+        const input = document.createElement("input");
+        input.className = "rename-input";
+        input.value = original;
+        input.setAttribute("maxlength","48");
+        nm.replaceWith(input);
+        input.focus(); input.select();
+
+        const commit = ()=> {
+          const newName = (input.value || "").trim();
+          if (!newName || newName === original) { renderManageList(); return; }
+          if (DRAFT[newName]) { alert("A list with that name already exists."); renderManageList(); return; }
+          DRAFT[newName] = DRAFT[original];
+          delete DRAFT[original];
+          const idx = DRAFT_ORDER.indexOf(original);
+          if (idx !== -1) DRAFT_ORDER.splice(idx, 1, newName);
+          if (ACTIVE_DRAFT === original) ACTIVE_DRAFT = newName;
+          renderManageList();
+        };
+
+        input.addEventListener("keydown",(ev)=>{
+          if (ev.key==="Enter") commit();
+          if (ev.key==="Escape") renderManageList();
+        });
+        input.addEventListener("blur", commit);
+      }
+    });
+  }
+
+  // Cancel (pink) => discard drafts and close
+  if (cancelManageBtn){
+    cancelManageBtn.addEventListener("click", ()=>{
+      DRAFT = null; DRAFT_ORDER = null; ACTIVE_DRAFT = null;
+      closeManageModal();
+    });
+  }
+
+  // Done (green) => commit drafts & order
+  if (doneManage){
+    doneManage.addEventListener("click", ()=>{
+      if (DRAFT){
+        LISTS = DRAFT; DRAFT=null;
+        ORDER = ensureOrder(LISTS, DRAFT_ORDER || ORDER);
+        ACTIVE = (ACTIVE_DRAFT && (ACTIVE_DRAFT in LISTS)) ? ACTIVE_DRAFT : ACTIVE;
+        DRAFT_ORDER = null; ACTIVE_DRAFT = null;
+        saveLists(()=>{ renderTabs(); renderList(); });
+      }
+      closeManageModal();
+    });
+  }
+
+  // Backdrop click = cancel (discard)
+  if (manageModal){
+    manageModal.addEventListener("click",(e)=>{
+      if (e.target.classList.contains("modal-backdrop")){
+        DRAFT = null; DRAFT_ORDER = null; ACTIVE_DRAFT=null;
+        closeManageModal();
+      }
+    });
+  }
+
+  // ---------- Init ----------
+  loadAll(()=>{ renderTabs(); renderList(); });
+})();
