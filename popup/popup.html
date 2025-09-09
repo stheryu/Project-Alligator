@@ -37,4 +37,32 @@
     </div>
   </div>
 
-  <
+  <footer class="totals">
+    <div id="count">0 items</div>
+    <div class="right">
+      <div>Selected: <span id="selectedTotal">$0.00</span></div>
+      <div>All: <span id="allTotal" class="all-total">$0.00</span></div>
+      <div id="mixHint" class="hint"></div>
+    </div>
+  </footer>
+
+  <div id="moveMenu" class="menu" hidden></div>
+
+  <div id="manageModal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div class="modal-title">Manage lists</div>
+        <button class="modal-close" id="manageClose" aria-label="Close">×</button>
+      </div>
+      <div id="manageList" class="manage-list"></div>
+      <div class="modal-foot">
+        <button id="addList" class="btn btn-outline">+ New List</button>
+        <button id="doneManage" class="btn btn-danger">Done</button>
+      </div>
+    </div>
+    <div class="modal-backdrop"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
