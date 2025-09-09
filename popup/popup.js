@@ -1,5 +1,7 @@
 /* popup.js — original 4-line card, right-side post-it tabs (10ch + ...),
-   working select-all, X-delete, Move To, in-popup Manage (Default undeletable) */
+   working select-all, X-delete, Move To, in-popup Manage (Default undeletable)
+   + Manage modal now uses DRAFT (Done = save, Cancel/backdrop/X = discard)
+   + “New List” is an always-visible last row with textbox + Add button */
 (() => {
   // ---------- Logo ----------
   try {
@@ -22,15 +24,21 @@
 
   // Manage modal
   const manageModal = document.getElementById("manageModal");
-  const manageList = document.getElementById("manageList");
-  const manageClose = document.getElementById("manageClose");
-  const addListBtn = document.getElementById("addList");
-  const doneManage = document.getElementById("doneManage");
+  const manageList  = document.getElementById("manageList");
+  const manageClose = document.getElementById("manageClose");   // old “X” (we keep it, acts like Cancel)
+  const addListBtn  = document.getElementById("addList");
+  if (addListBtn) addListBtn.remove();
+  const doneManage  = document.getElementById("doneManage");
+  const modalFoot   = document.querySelector("#manageModal .modal-foot");
 
   // ---------- State ----------
   let LISTS = Object.create(null); // { listName: Item[] }
   let ACTIVE = "Default";
   const selected = new Set();      // keys for ACTIVE list
+
+  // DRAFT state for Manage modal (only committed on Done)
+  let DRAFT = null;
+  let ACTIVE_DRAFT = null;
 
   // ---------- Helpers ----------
   const keyOf = it => (String(it?.id || it?.link || "")).toLowerCase();
@@ -76,7 +84,6 @@
   const saveLists = (cb)=> chrome.storage.sync.set({ uc_lists: LISTS, uc_active: ACTIVE }, cb);
 
   // ---------- Tabs (right-side “post-it”) ----------
-  // 10-char truncate with "..." and ALL-CAPS
   const shortTab = (s) => {
     const t = String(s || "");
     const up = t.toUpperCase();
@@ -89,7 +96,6 @@
       const tab = document.createElement("div");
       tab.className = "tab" + (name===ACTIVE ? " active" : "");
       tab.title = name;
-      // centered label; CSS rotates and centers it
       tab.innerHTML = `<span class="label">${escapeHtml(shortTab(name))}</span>`;
       tab.addEventListener("click", ()=>{
         if (ACTIVE !== name){
@@ -212,19 +218,42 @@
   deleteSelEl.addEventListener("click", removeSelected);
 
   // ---------- Move menu ----------
-  function openMoveMenu(){
-    const names=Object.keys(LISTS);
-    moveMenu.innerHTML = [
-      `<div class="mi new" data-act="new">+ New List</div>`,
-      ...names.map(n=>`<div class="mi" data-name="${escapeHtml(n)}">${escapeHtml(n)}</div>`),
-      `<div class="mi manage" data-act="manage">Manage lists…</div>`
-    ].join("");
-    const r = moveBtn.getBoundingClientRect();
-    const fr = frameEl.getBoundingClientRect();
-    moveMenu.style.transform = `translate(${r.left - fr.left}px, ${r.bottom - fr.top + 6}px)`;
-    moveMenu.hidden=false;
-  }
-  function closeMoveMenu(){ moveMenu.hidden=true; moveMenu.style.transform="translate(-9999px,-9999px)"; }
+function openMoveMenu(){
+  const names = Object.keys(LISTS);
+  moveMenu.innerHTML = [
+    ...names.map(n => `<div class="mi" data-name="${escapeHtml(n)}">${escapeHtml(n)}</div>`),
+    `<div class="mi manage" data-act="manage">Add/Manage Lists</div>`
+  ].join("");
+
+  // show so we can measure
+  moveMenu.hidden = false;
+
+  const btnRect = moveBtn.getBoundingClientRect();
+  const menuRect = moveMenu.getBoundingClientRect();
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+
+  // place just below the button
+  let left = btnRect.left;
+  let top  = btnRect.bottom + 6;
+
+  // clamp horizontally so it stays inside the popup
+  if (left + menuRect.width > vw - 8) left = vw - 8 - menuRect.width;
+  if (left < 8) left = 8;
+
+  // if there's not enough space below, flip it above the button
+  if (top + menuRect.height > vh - 8) top = btnRect.top - 6 - menuRect.height;
+  if (top < 8) top = 8;
+
+  moveMenu.style.left = `${Math.round(left)}px`;
+  moveMenu.style.top  = `${Math.round(top)}px`;
+}
+
+function closeMoveMenu(){
+  moveMenu.hidden = true;
+  moveMenu.style.left = "-9999px";
+  moveMenu.style.top  = "-9999px";
+}
 
   moveBtn.addEventListener("click",(e)=>{
     e.stopPropagation();
@@ -242,11 +271,7 @@
     const node=e.target.closest(".mi"); if(!node) return;
     const act=node.dataset.act||"";
     if (act==="new"){
-      const name=prompt("New list name:");
-      if (name && name.trim()){
-        const n=name.trim(); if(!LISTS[n]) LISTS[n]=[];
-        moveSelectedTo(n);
-      }
+      openManageModal(); // open modal; last row has textbox + Add
       closeMoveMenu();
       return;
     }
@@ -259,86 +284,184 @@
     closeMoveMenu();
   });
 
-  // ---------- Manage lists modal (Default cannot be deleted) ----------
-  function openManageModal(){
-    const names=Object.keys(LISTS);
-    manageList.innerHTML = names.map(n=>{
+  // ---------- Manage lists modal (DRAFT; Default locked; inline Add row) ----------
+
+  function initDraftIfNeeded(){
+    if (!DRAFT){
+      DRAFT = JSON.parse(JSON.stringify(LISTS));
+      ACTIVE_DRAFT = ACTIVE;
+    }
+  }
+
+  function renderManage(){
+    // rows from DRAFT; lock Default (no Rename/Delete)
+    const names = Object.keys(DRAFT);
+    const rows = names.map(n => {
       const isDefault = /^default$/i.test(n);
-      const deleteHTML = isDefault ? "" : `<a class="link rm" style="color:#B91C1C;">Delete</a>`;
+      const actions = isDefault
+        ? "" // no actions for Default
+        : `<a class="link rn" style="color:#111;">Rename</a>
+           <a class="link rm" style="color:#B91C1C;">Delete</a>`;
       return `
-        <div class="manage-row" data-name="${escapeHtml(n)}">
+        <div class="manage-row" data-name="${escapeHtml(n)}" data-lock="${isDefault ? "1" : "0"}">
           <div class="nm">${escapeHtml(n)}</div>
-          <a class="link rn" style="color:#111;">Rename</a>
-          ${deleteHTML}
+          ${actions}
         </div>`;
     }).join("");
-    manageModal.hidden=false;
-  }
-  function closeManageModal(){ manageModal.hidden=true; }
 
+    // Always-visible "New List" row at the end
+    const newRow = `
+      <div class="manage-row new-row" data-new="1">
+        <input class="rename-input new-name" placeholder="New list name" maxlength="48" style="width:220px;max-width:220px;" />
+        <a class="link new-add">Add</a>
+      </div>`;
+
+    manageList.innerHTML = rows + newRow;
+
+    // Hide the old “X” visually (still wired as Cancel)
+    if (manageClose) manageClose.style.display = "none";
+
+    // Footer buttons: ensure Cancel (pink) exists & is wired; style Done (green)
+    if (modalFoot){
+      let cancelBtn = document.getElementById("cancelManage");
+      if (!cancelBtn){
+        cancelBtn = document.createElement("button");
+        cancelBtn.id = "cancelManage";
+        cancelBtn.type = "button";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.style.cssText = "height:36px;padding:0 14px;border-radius:10px;border:1.5px solid var(--pink);background:var(--pink);color:#fff;font-weight:700;cursor:pointer;";
+        modalFoot.insertBefore(cancelBtn, modalFoot.firstChild);
+      }
+      // always (re)bind to be safe
+      cancelBtn.onclick = cancelManage;
+
+      if (doneManage){
+        doneManage.textContent = "Done";
+        doneManage.style.cssText = "height:36px;padding:0 14px;border-radius:10px;border:1.5px solid var(--green);background:var(--green);color:#fff;font-weight:700;cursor:pointer;";
+        // ensure single binding
+        doneManage.onclick = commitManage;
+      }
+    }
+
+    // Focus input for quick adding
+    const input = manageList.querySelector(".new-name");
+    if (input) input.focus();
+  }
+
+  function openManageModal(){
+    initDraftIfNeeded();
+    renderManage();
+    manageModal.hidden = false;
+  }
+
+  function commitManage(){
+    if (!DRAFT){ manageModal.hidden = true; return; }
+    LISTS = DRAFT;
+    ACTIVE = (ACTIVE_DRAFT && (ACTIVE_DRAFT in LISTS)) ? ACTIVE_DRAFT
+            : (LISTS["Default"] ? "Default" : (Object.keys(LISTS)[0] || "Default"));
+    DRAFT = null; ACTIVE_DRAFT = null;
+    saveLists(()=>{ renderTabs(); renderList(); });
+    manageModal.hidden = true;
+  }
+
+  function cancelManage(){
+    // discard draft, do NOT save
+    DRAFT = null; ACTIVE_DRAFT = null;
+    manageModal.hidden = true;
+  }
+
+  // Clicks & keys inside the modal list
   manageList.addEventListener("click",(e)=>{
     e.preventDefault();
-    const row = e.target.closest(".manage-row");
-    if (!row) return;
-    const name = row.dataset.name || "";
 
-    // Delete list (guard Default)
+    // Add new list
+    if (e.target.classList.contains("new-add")){
+      const input = manageList.querySelector(".new-name");
+      if (!input) return;
+      const n = (input.value || "").trim();
+      if (!n) return;
+      if (DRAFT[n]) { alert("A list with that name already exists."); return; }
+      DRAFT[n] = [];
+      ACTIVE_DRAFT = n;
+      renderManage();
+      return;
+    }
+
+    const row = e.target.closest(".manage-row");
+    if (!row || row.dataset.new === "1") return;
+
+    const name = row.dataset.name || "";
+    const isDefault = row.dataset.lock === "1" || /^default$/i.test(name);
+    if (isDefault) return; // no actions on Default
+
+    // Delete (in DRAFT)
     if (e.target.classList.contains("rm")){
-      if (/^default$/i.test(name)) return;
       if (confirm(`Delete list “${name}”?`)){
-        const wasActive = (name===ACTIVE);
-        delete LISTS[name];
+        const wasActive = (name===ACTIVE_DRAFT);
+        delete DRAFT[name];
         if (wasActive){
-          ACTIVE = "Default";
-          if (!LISTS["Default"]) LISTS["Default"] = [];
+          ACTIVE_DRAFT = DRAFT["Default"] ? "Default" : (Object.keys(DRAFT)[0] || "Default");
         }
-        saveLists(()=>{ renderTabs(); renderList(); openManageModal(); });
+        renderManage();
       }
       return;
     }
 
-    // Rename list
+    // Rename (in DRAFT)
     if (e.target.classList.contains("rn")){
       const nm = row.querySelector(".nm");
       const original = name;
       const input = document.createElement("input");
+      input.className = "rename-input";
       input.value = original;
       input.setAttribute("maxlength","48");
+      input.style.width = "220px";
+      input.style.maxWidth = "220px";
       nm.replaceWith(input);
       input.focus();
       input.select();
 
       const commit = ()=> {
         const newName = (input.value || "").trim();
-        if (!newName || newName === original) { openManageModal(); return; }
-        if (LISTS[newName]) { alert("A list with that name already exists."); openManageModal(); return; }
-        LISTS[newName] = LISTS[original];
-        delete LISTS[original];
-        if (ACTIVE === original) ACTIVE = newName;
-        if (!LISTS["Default"]) LISTS["Default"] = [];
-        saveLists(()=>{ renderTabs(); renderList(); openManageModal(); });
+        if (!newName || newName === original) { renderManage(); return; }
+        if (DRAFT[newName]) { alert("A list with that name already exists."); renderManage(); return; }
+        DRAFT[newName] = DRAFT[original];
+        delete DRAFT[original];
+        if (ACTIVE_DRAFT === original) ACTIVE_DRAFT = newName;
+        renderManage();
       };
 
       input.addEventListener("keydown",(ev)=>{
         if (ev.key==="Enter") commit();
-        if (ev.key==="Escape") openManageModal();
+        if (ev.key==="Escape") renderManage();
       });
       input.addEventListener("blur", commit);
     }
   });
 
-  manageClose.addEventListener("click", closeManageModal);
-  doneManage.addEventListener("click", closeManageModal);
-  addListBtn.addEventListener("click", ()=>{
-    const name=prompt("New list name:");
-    if (name && name.trim()){
-      const n=name.trim(); if(!LISTS[n]) LISTS[n]=[];
-      saveLists(()=>{ renderTabs(); renderList(); openManageModal(); });
+  // Enter to add from the new-name input
+  manageList.addEventListener("keydown",(e)=>{
+    if (e.target && e.target.classList.contains("new-name") && e.key === "Enter"){
+      e.preventDefault();
+      const input = e.target;
+      const n = (input.value || "").trim();
+      if (!n) return;
+      if (DRAFT[n]) { alert("A list with that name already exists."); return; }
+      DRAFT[n] = [];
+      ACTIVE_DRAFT = n;
+      renderManage();
     }
   });
+
+  // Footer buttons (also bound in renderManage for safety)
+  if (doneManage) doneManage.addEventListener("click", commitManage);
+  if (manageClose) manageClose.addEventListener("click", cancelManage); // “X” behaves like Cancel
   manageModal.addEventListener("click",(e)=>{
-    if (e.target.classList.contains("modal-backdrop")) closeManageModal();
+    if (e.target.classList.contains("modal-backdrop")) cancelManage();
   });
+
+  // Replace “Add List” behavior: open modal (no prompt)
+  addListBtn.addEventListener("click", ()=>{ openManageModal(); });
 
   // ---------- Init ----------
   loadAll(()=>{ renderTabs(); renderList(); });
