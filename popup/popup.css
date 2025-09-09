@@ -12,21 +12,21 @@
   --tab-h: 64px;
   --tab-gap: 3px;
   --rail-w: calc(var(--tab-w) + 16px); /* ← semicolon is important */
-  --frame-pad: 16px;                   /* same padding your .frame uses */
+  --frame-pad: 14px;                   /* was 16px: keep cards tighter overall */
   --totals-nudge: 0px;
 
   --btn-h: 40px;
 
-  /* make the popup a bit wider again */
+  /* popup width */
   --page-w: clamp(640px, 60vw, 920px);
 
-  /* item helpers */
-  --thumb: 124px;
-  --title-offset: 34px;
-  --title-gap: 10px;
+  /* item helpers (slightly smaller to fit 4 items) */
+  --thumb: 110px;          /* was 124px */
+  --title-offset: 30px;    /* was 34px */
+  --title-gap: 8px;        /* was 10px */
   --tight: 1.10;
   --tighter: 1.05;
-  --x-gutter: 40px;
+  --x-gutter: 36px;        /* was 40px */
 }
 
 html,body{
@@ -39,24 +39,24 @@ html,body{
 /* Brand */
 .topbar{ display:flex; align-items:center; gap:12px; padding:14px 16px 8px; }
 .brand{ display:flex; align-items:center; gap:10px; }
-#logo{ width:30px; height:30px; object-fit:contain; }
-.name{ font-size:22px; font-weight:800; color:var(--green); }
+#logo{ width:35px; height:35px; object-fit:contain; }
+.name{ font-size:23px; font-weight:800; color:var(--green); }
 
 /* Divider only across content width (not under tabs) */
 .divider{
   margin-left:16px;
   width: calc(100% - var(--rail-w) - 32px);
-  height:3px; background:var(--mint-line); border-radius:1px;
+  height:1px; background:var(--mint-line); border-radius:1px;
 }
 
 /* Content area with right padding for rail */
 .wrap{
   margin: 10px 12px 2px;
-  padding-right: var(--rail-w);  /* was 16px */
+  padding-right: var(--rail-w);
 }
 
 /* Toolbar */
-.toolbar{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.toolbar{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; } /* was 10px */
 .select-all{ display:flex; align-items:center; gap:10px; }
 .select-all input{ width:18px; height:18px; }
 .actions{ display:flex; gap:10px; }
@@ -73,12 +73,12 @@ html,body{
 .frame{
   border:1px solid var(--outline);
   border-radius:16px;
-  padding:16px;
+  padding:var(--frame-pad);         /* was 16px, now 14px via var */
   background:#fff;
 }
 
-/* CHANGED: tighter vertical rhythm between cards */
-#list{ display:flex; flex-direction:column; gap:6px; }
+/* Tighter rhythm between cards */
+#list{ display:flex; flex-direction:column; gap:4px; } /* was 6px */
 
 #frame{
   position: relative;
@@ -128,10 +128,9 @@ html,body{
   position: relative;
   display: grid;
   grid-template-columns: 28px var(--thumb) 1fr; /* checkbox | thumb | text */
-  /* CHANGED: tighter spacing & margins */
   column-gap: 8px;
-  padding: 10px 12px 10px;
-  margin: 4px 0;
+  padding: 8px 12px 6px;   /* was 10px 12px 10px */
+  margin: 3px 0;          /* was 4px 0 */
   border: 1px solid #E5E7EB;
   border-radius: 14px;
   background: #fff;
@@ -148,7 +147,6 @@ html,body{
   border-radius: 14px;
   background: #F6F7F8;
   display:block;
-  
 }
 
 /* Text column */
@@ -157,9 +155,9 @@ html,body{
   flex-direction:column;
   gap:0;
   min-width:0;
-  min-height:0;                   /* keep it 0 so text doesn't force extra height */
+  min-height:0;
   padding-right: var(--x-gutter);
-  padding-top:0;                  /* no vertical padding here */
+  padding-top:0;
   padding-bottom:0;
   text-decoration: none !important;
 }
@@ -169,46 +167,42 @@ html,body{
   color: #374151;
   font-weight: 600;
   font-size: 15px;
-  line-height: 1.28;
-  margin: 0 0 var(--title-gap) 0;
+  line-height: 1.25;                    /* was 1.28 */
+  margin: var(--title-offset) 0 var(--title-gap) 0;  /* title starts a bit lower, smaller gap */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  margin: var(--title-offset) 0 var(--title-gap) 0;
   overflow: hidden;
-  overflow-wrap: anywhere;  /* modern */
-  word-break: break-word;   /* fallback */
-  hyphens: auto;            /* if dictionaries available */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  hyphens: auto;
 }
 
 /* Brand / domain / price — tight stack */
 .item .brand{
-  color:#1F2937; font-weight:600; font-size:13px; line-height:var(--tight); margin:0;line-height: var(--tight);
+  color:#1F2937; font-weight:600; font-size:13px; line-height:var(--tight); margin:0;
 }
 .item .domain{
-  color:#6B7280; font-size:12px; line-height:var(--tight); margin-top:2px; line-height: var(--tight);
+  color:#6B7280; font-size:12px; line-height:var(--tight); margin-top:1px;
 }
 .item .price{
-  color:#058E3F; font-weight:600; font-size:14px; line-height:var(--tight); margin-top:4px;
+  color:#058E3F; font-weight:600; font-size:14px; line-height:var(--tight); margin-top:3px;
   margin-bottom: 0;
 }
 
-/* Corner delete */
+/* Corner delete (slightly smaller) */
 .item .del{
   position: absolute;
-  top: 10px; right: 10px;
-  width: 24px; height: 24px;
+  top: 8px; right: 8px;     /* was 10/10 */
+  width: 22px; height: 22px;/* was 24 */
   border-radius: 50%;
   border: 1px solid #D1D5DB;
   background:#fff; color:#374151;
-  font-size:16px; line-height:22px; text-align:center; cursor:pointer;
+  font-size:15px; line-height:20px; text-align:center; cursor:pointer;
 }
 .item .del:hover{ background:#F3F4F6; }
 
 /* ---------- Totals ---------- */
-/* CHANGED: align with the inner edges of the outer grey box and
-   respect the right tabs rail so it doesn’t sit under the tabs */
-/* Bottom bar aligns with the card edges (same as .frame padding) */
 .totals{
   display:flex;
   align-items:flex-start;
@@ -218,38 +212,54 @@ html,body{
   margin: 12px calc(var(--rail-w) + var(--frame-pad) + var(--totals-nudge))
           16px var(--frame-pad);
 
-  padding: 0;            /* no side padding — we align with margins */
+  padding: 0;
   width: auto;
   box-sizing: border-box;
+  font-size: 13px;                 /* base size */
 }
-.totals .right{ text-align:right; }
+.totals .left{ font-size: 13px; }
+
+/* right column stacks lines, keeps them right-aligned */
+.totals .right{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+}
+
+/* add space between Selected and All (not before the hint) */
+.totals .right > :not(.hint) + :not(.hint){
+  margin-top: 2px;                 /* tweak to taste */
+}
 
 @supports (padding-inline: 1px){
   .totals{ padding-block: 12px 16px; padding-inline: 16px; }
 }
 
-/* Optional: modern, equivalent shorthand if you prefer */
-@supports (padding-inline: 1px){
-  .totals{ padding-block: 12px 16px; padding-inline: 16px; }
+/* Emphasis */
+#allTotal,
+.all-total{
+  color: var(--green) !important;
+  font-weight: 800;
+  font-size: 16px;
 }
-.hint{ color:#6b7280; font-size:12px; padding-top:2px; }
-.all-total{ color:var(--green); font-weight:800; }
-
+#selectedTotal,
+.selected-total{
+  color: var(--muted) !important;   /* normal text color */
+  font-weight: 800;
+  font-size: 16px;
+}
 /* Move menu popover */
 .menu{
-  position: fixed;                 /* was absolute */
-  top: -9999px; left: -9999px;     /* parked offscreen when closed */
-  transform: none;                 /* no translate() hiding anymore */
+  position: fixed;
+  top: -9999px; left: -9999px;
+  transform: none;
   min-width:220px; background:#fff; border:1px solid var(--outline);
   border-radius:12px; box-shadow:0 12px 28px rgba(16,24,40,.12); z-index:9999; overflow:hidden;
 }
-/* keep measuring while "hidden" just like before */
 .menu[hidden]{ display:block; }
 .menu .mi{ display:flex; align-items:center; gap:10px; padding:10px 12px; cursor:pointer; border-bottom:1px solid #F1F5F9; }
 .menu .mi:last-child{ border-bottom:none; }
 .menu .mi:hover{ background:#F8FAFC; }
-
-/* your bold green manage row */
 .menu .mi.manage{ font-weight:800; color:var(--green); }
 
 /* Manage modal */
@@ -293,7 +303,7 @@ html,body{
 /* SHORTER RENAME INPUT so it doesn't hit the actions */
 .manage-row input,
 .rename-input{
-  width: min(240px, 60%);   /* <- key change */
+  width: min(240px, 60%);
   height:32px;
   box-sizing:border-box;
   border:1px solid #D1D5DB; border-radius:8px;
