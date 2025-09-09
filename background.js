@@ -627,4 +627,22 @@ chrome.webRequest.onBeforeRequest.addListener(
     } catch {}
   },
   {
-    
+    urls: [
+      "*://*.uniqlo.com/*",
+      "*://*.fastretailing.com/*",
+      "*://*.elgnisolqinu.com/*"
+    ],
+    // MV3-valid types only (no "fetch")
+    types: ["xmlhttprequest", "ping", "other", "sub_frame", "main_frame", "websocket"]
+  },
+  ["requestBody"]
+);
+
+      log("webRequest assist active (SFCC/eBay/Zara/Mango/UNIQLO)");
+    }
+  } catch (e) {
+    logError("webRequest listener setup error:", e);
+  }
+
+  log(`SW v${VERSION} ready`);
+})();

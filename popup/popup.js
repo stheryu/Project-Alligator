@@ -1,193 +1,251 @@
-// popup/popup.js
-import { getCart, clearCart, removeItem } from "../utils/storage.js";
-
-const hasChrome = !!(globalThis.chrome && chrome.runtime);
-const safeText = (v) => (v == null ? "" : String(v));
-const MODE_KEY = "shoppingMode";
-
-// ---- Shopping mode helpers (persist + reflect) ----
-function getMode() {
-  return new Promise((resolve) => {
-    try {
-      chrome.storage.sync.get({ [MODE_KEY]: true }, (o) => resolve(!!o[MODE_KEY]));
-    } catch {
-      resolve(true);
-    }
-  });
-}
-function setMode(on) {
-  return new Promise((resolve) => {
-    try { chrome.storage.sync.set({ [MODE_KEY]: !!on }, resolve); }
-    catch { resolve(); }
-  });
-}
-function reflectMode(btn, on) {
-  if (!btn) return;
-  btn.setAttribute("aria-pressed", String(!!on));
-  btn.title = `Shopping mode: ${on ? "On" : "Off"}`;
-  btn.classList.toggle("is-off", !on);
-}
-
-// Site name from link
-function siteFromLink(link) {
+/* popup.js — block layout + multi-select + totals + logo fix + robust X-delete */
+(() => {
+  // Ensure logo path resolves inside extension
   try {
-    const { hostname } = new URL(link);
-    const h = hostname.replace(/^www\./i, "");
-    const parts = h.split(".");
-    const base = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
-    return base.charAt(0).toUpperCase() + base.slice(1);
-  } catch {
-    return "View";
+    const logo = document.getElementById("logo");
+    if (logo) logo.src = chrome.runtime.getURL("icons/alligator_icon.png");
+  } catch {}
+
+  const listEl = document.getElementById("list");
+  const toggleAllEl = document.getElementById("toggleAll");
+  const deleteSelEl = document.getElementById("deleteSel");
+  const countEl = document.getElementById("count");
+  const selectedTotalEl = document.getElementById("selectedTotal");
+  const allTotalEl = document.getElementById("allTotal");
+  const mixHintEl = document.getElementById("mixHint");
+
+  let CART = [];
+  const selected = new Set();
+
+  // ---------- currency parsing / totals ----------
+  const CUR_SYM = { "$":"USD", "€":"EUR", "£":"GBP", "¥":"JPY", "₹":"INR" };
+  const PRICE_RE = /([$€£¥₹])\s*([0-9][\d.,]*)|(?:\b(USD|CAD|EUR|GBP|JPY|INR|AUD|CHF|SEK|NOK|DKK)\b)\s*([0-9][\d.,]*)|([0-9][\d.,]*)\s*(USD|CAD|EUR|GBP|JPY|INR|AUD|CHF|SEK|NOK|DKK)\b/i;
+
+  function parsePrice(str) {
+    const s = String(str || "").trim();
+    const m = s.match(PRICE_RE);
+    if (!m) return null;
+    const rawNum = m[2] || m[4] || m[5] || "";
+    const num = rawNum.replace(/[^\d.,]/g,"").replace(/[.,](?=\d{3}\b)/g,"").replace(",",".");
+    const f = parseFloat(num);
+    if (!Number.isFinite(f)) return null;
+    const sym = m[1];
+    const code = (m[3] || m[6] || (sym && CUR_SYM[sym]) || "USD").toUpperCase();
+    return { code, cents: Math.round(f * 100) };
   }
-}
 
-function renderItems(items, itemsContainer) {
-  if (!items || items.length === 0) {
-    itemsContainer.innerHTML = '<div class="empty">No items yet.</div>';
-    return;
-  }
-
-  itemsContainer.innerHTML = items
-    .map((item) => {
-      const id    = safeText(item.id);
-      const img   = safeText(item.img);
-      const title = safeText(item.title || "Untitled item");
-      const brand = safeText(item.brand || "");
-      const price = safeText(item.price || "");
-      const link  = safeText(item.link || "#");
-      const site  = link && link !== "#" ? siteFromLink(link) : "View";
-
-      return `
-        <div class="item" role="link" tabindex="0"
-             data-id="${id}" data-link="${link}" aria-label="Open on ${site}">
-          <img src="${img}" alt="${title}" loading="lazy" />
-          <div class="details">
-            <strong title="${title}">${title}</strong>
-            <p>${brand}</p>
-            <p>${price}</p>
-            <a href="${link}" target="_blank" rel="noopener noreferrer" title="${link}">${site}</a>
-          </div>
-          <button class="remove" aria-label="Remove item" title="Remove">×</button>
-        </div>`;
-    })
-    .join("");
-}
-
-async function loadAndRender(itemsContainer) {
-  const items = await getCart();
-  renderItems(items, itemsContainer);
-}
-
-function wirePopup() {
-  // Logo path
-  const logoEl = document.querySelector(".brand-logo");
-  if (logoEl) {
-    try {
-      logoEl.src = hasChrome && chrome.runtime.getURL
-        ? chrome.runtime.getURL("icons/alligator_icon.png")
-        : "../icons/alligator_icon.png";
-    } catch {
-      logoEl.src = "../icons/alligator_icon.png";
+  function sumByCurrency(items) {
+    const map = {};
+    for (const it of items) {
+      const p = parsePrice(it.price);
+      if (!p) continue;
+      map[p.code] = (map[p.code] || 0) + p.cents;
     }
+    return map;
   }
 
-  const itemsContainer = document.getElementById("items");
-  const clearBtn = document.getElementById("clear-all");
-  const toggleBtn = document.getElementById("shopping-toggle");
-  if (!itemsContainer) {
-    console.error("[UnifiedCart] Missing #items container in popup.html");
-    return;
+  function fmt(code, cents) {
+    const amount = (cents/100).toFixed(2);
+    if (code === "USD") return `$${amount}`;
+    return `${code} ${amount}`;
   }
 
-  // ---- Initialize Shopping Mode toggle ----
-  (async () => {
-    const on = await getMode();
-    reflectMode(toggleBtn, on);
-  })();
+  function formatTotals(map) {
+    const order = ["USD","CAD","EUR","GBP","JPY","INR","AUD","CHF","SEK","NOK","DKK"];
+    const parts = [];
+    for (const k of order) if (map[k]) parts.push(fmt(k, map[k]));
+    for (const k of Object.keys(map)) if (!order.includes(k)) parts.push(fmt(k, map[k]));
+    return parts.join(", ") || "$0.00";
+  }
 
-  toggleBtn?.addEventListener("click", async () => {
-    const currentlyOn = toggleBtn.getAttribute("aria-pressed") === "true";
-    const next = !currentlyOn;
-    reflectMode(toggleBtn, next);
-    await setMode(next);
+  function updateTotals() {
+    const allMap = sumByCurrency(CART);
+    const selMap = sumByCurrency(CART.filter(it => selected.has(keyOf(it))));
+    allTotalEl.textContent = formatTotals(allMap);
+    selectedTotalEl.textContent = formatTotals(selMap);
+    const mix = (Object.keys(allMap).length > 1 || Object.keys(selMap).length > 1);
+    mixHintEl.textContent = mix ? "Mixed currencies shown separately." : "";
+  }
 
-    // Optional: nudge background (not strictly needed, storage change propagates)
-    try { chrome.runtime.sendMessage({ action: "SHOPPING_MODE_CHANGED", enabled: next }); } catch {}
-  });
+  // ---------- storage ----------
+  function loadCart(cb) {
+    try {
+      chrome.storage.sync.get({ cart: [] }, ({ cart }) => {
+        CART = Array.isArray(cart) ? cart : [];
+        cb?.();
+      });
+    } catch { CART = []; cb?.(); }
+  }
+  function saveCart(next, cb) {
+    try { chrome.storage.sync.set({ cart: next }, cb); } catch { cb?.(); }
+  }
 
-  const openLink = (url) => {
-    if (!url || url === "#") return;
-    try { window.open(url, "_blank", "noopener"); } catch {}
-  };
+  // ---------- rendering ----------
+  const keyOf = (it) => (String(it.id || it.link || "")).toLowerCase();
 
-  // Delegated click: remove OR open card
-  itemsContainer.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof Element)) return;
+  function domainOf(link="") {
+    try { return new URL(String(link)).hostname.replace(/^www\./,""); } catch { return ""; }
+  }
 
-    const removeBtn = target.closest(".remove");
-    if (removeBtn) {
-      const card = removeBtn.closest(".item");
-      const id = card?.dataset.id;
-      if (!id) return;
-      e.stopPropagation();
-      e.preventDefault();
-      card.remove();
-      removeItem(id).catch(() => loadAndRender(itemsContainer));
+  function escapeHtml(s){
+    return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function render() {
+    listEl.innerHTML = "";
+    selected.clear();
+    toggleAllEl.indeterminate = false;
+    toggleAllEl.checked = false;
+
+    if (!CART.length) {
+      countEl.textContent = "0 items";
+      listEl.innerHTML = `<div class="empty">No items saved yet.</div>`;
+      updateTotals();
+      updateDeleteBtn();
       return;
     }
 
-    if (target.closest("a")) return; // let <a> work normally
+    countEl.textContent = `${CART.length} item${CART.length>1?"s":""}`;
 
-    const card = target.closest(".item");
-    if (card?.dataset.link) openLink(card.dataset.link);
-  });
+    for (const it of CART) {
+      const id = keyOf(it);
+      const dom = domainOf(it.link);
+      const card = document.createElement("div");
+      card.className = "item";
+      card.dataset.id = id;
 
-  // Keyboard access
-  itemsContainer.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" && e.key !== " ") return;
-    const card = (e.target instanceof Element) ? e.target.closest(".item") : null;
-    if (!card?.dataset.link) return;
-    e.preventDefault();
-    openLink(card.dataset.link);
-  });
+      // selection (left)
+      const sel = document.createElement("label");
+      sel.className = "sel";
+      sel.innerHTML = `<input type="checkbox" class="selbox" aria-label="Select item" />`;
+      card.appendChild(sel);
 
-  // Clear all
-  clearBtn?.addEventListener("click", async () => {
-    itemsContainer.innerHTML =
-      '<div class="empty">No items yet. Add something to your cart and it will appear here.</div>';
-    try { await clearCart(); }
-    finally { await loadAndRender(itemsContainer); }
-  });
+      // thumbnail
+      const img = document.createElement("img");
+      img.className = "thumb";
+      img.src = it.img || "";
+      img.alt = "";
+      card.appendChild(img);
 
-  // Live refresh from background
-  if (hasChrome && chrome.runtime?.onMessage) {
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.action === "CART_UPDATED" && Array.isArray(msg.items)) {
-        renderItems(msg.items, itemsContainer);
-      }
+      // meta (clickable to product page)
+      const a = document.createElement("a");
+      a.className = "meta";
+      a.href = it.link || "#";
+      a.target = "_blank";
+      a.rel = "noreferrer";
+      a.innerHTML = `
+        <div class="line1">
+          <div class="title" title="${escapeHtml(it.title||"")}">${escapeHtml(it.title||"")}</div>
+          <div class="price">${escapeHtml(it.price||"")}</div>
+        </div>
+        <div class="line2">
+          <div class="brand" title="${escapeHtml(it.brand||"")}">${escapeHtml(it.brand||"")}</div>
+          <div class="dot"></div>
+          <div class="domain" title="${dom}">${dom}</div>
+        </div>`;
+      card.appendChild(a);
+
+      // delete (small, top-right, dark gray)
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "del";
+      del.setAttribute("aria-label", "Remove");
+      del.textContent = "×";
+      card.appendChild(del);
+
+      listEl.appendChild(card);
+    }
+
+    updateTotals();
+    updateDeleteBtn();
+  }
+
+  // ---------- actions ----------
+  function reflectSelectAll() {
+    if (!CART.length) { toggleAllEl.checked = false; toggleAllEl.indeterminate = false; return; }
+    const total = CART.length;
+    const selCount = CART.reduce((n, it) => n + (selected.has(keyOf(it)) ? 1 : 0), 0);
+    toggleAllEl.checked = selCount === total;
+    toggleAllEl.indeterminate = selCount > 0 && selCount < total;
+  }
+
+  function updateDeleteBtn() {
+    deleteSelEl.disabled = selected.size === 0;
+  }
+
+  function removeOne(id) {
+    const next = CART.filter(it => keyOf(it) !== id);
+    saveCart(next, () => {
+      CART = next;
+      render();
     });
   }
 
-  // Storage fallback
-  if (hasChrome && chrome.storage?.onChanged) {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === "sync" && changes.cart) loadAndRender(itemsContainer);
-      // If you want the button to react to mode changes made elsewhere while popup is open:
-      if (area === "sync" && "shoppingMode" in changes) {
-        reflectMode(toggleBtn, !!changes.shoppingMode.newValue);
-      }
+  function removeSelected() {
+    if (!selected.size) return;
+    const next = CART.filter(it => !selected.has(keyOf(it)));
+    saveCart(next, () => {
+      CART = next;
+      render();
     });
   }
 
-  // Initial render
-  loadAndRender(itemsContainer);
-}
+  // ---------- delegated events (fixes X-click conflicts) ----------
+  // Item clicks: open link unless clicking select box or delete
+  listEl.addEventListener("click", (e) => {
+    const delBtn = e.target.closest(".del");
+    if (delBtn) {
+      e.preventDefault(); e.stopPropagation();
+      const card = delBtn.closest(".item");
+      if (card) removeOne(card.dataset.id);
+      return;
+    }
+    const inSel = e.target.closest(".sel");
+    if (inSel) return; // checkbox area; change handler will process
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", wirePopup);
-} else {
-  wirePopup();
-}
+    const card = e.target.closest(".item");
+    if (card) {
+      const a = card.querySelector(".meta");
+      if (a) a.click();
+    }
+  });
 
-console.log("Alligator popup v0.2.0 loaded");
+  // Selection toggles
+  listEl.addEventListener("change", (e) => {
+    const box = e.target.closest(".selbox");
+    if (!box) return;
+    const card = e.target.closest(".item");
+    if (!card) return;
+    const id = card.dataset.id;
+    if (box.checked) selected.add(id); else selected.delete(id);
+    reflectSelectAll();
+    updateDeleteBtn();
+    updateTotals();
+  });
+
+  // ---------- wire UI ----------
+  toggleAllEl.addEventListener("change", () => {
+    const check = toggleAllEl.checked;
+    selected.clear();
+    if (check) CART.forEach(it => selected.add(keyOf(it)));
+    document.querySelectorAll(".item .selbox").forEach(cb => { cb.checked = check; });
+    reflectSelectAll();
+    updateDeleteBtn();
+    updateTotals();
+  });
+
+  deleteSelEl.addEventListener("click", removeSelected);
+
+  // live updates from background
+  try {
+    chrome.runtime.onMessage.addListener((m) => {
+      if (m && m.action === "CART_UPDATED" && Array.isArray(m.items)) {
+        CART = m.items;
+        render();
+      }
+    });
+  } catch {}
+
+  // init
+  loadCart(render);
+})();

@@ -1,39 +1,134 @@
 <!doctype html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <title>alligator</title>
-    <link rel="stylesheet" href="popup.css" />
-  </head>
-  <body>
-    <header class="uc-header">
-      <div class="brand">
-        <img class="brand-logo" src="../icons/alligator_icon.png" alt="Alligator" />
-        <h1 class="brand-title">alligator</h1>
-      </div>
+<head>
+  <meta charset="utf-8" />
+  <title>Alligator</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#ffffff;
+      --card:#ffffff;
+      --text:#1f2937;
+      --muted:#6b7280;
+      --brand:#058E3F;
+      --brand-soft:#E7F1BC;
+      --border:#e5e7eb;
+      --danger:#ef4444;
+      --dark:#374151;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:13px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .wrap{width:380px;max-height:560px;display:flex;flex-direction:column}
 
-      <!-- Shopping mode toggle -->
-      <button
-        id="shopping-toggle"
-        class="uc-toggle"
-        aria-pressed="true"
-        title="Shopping Mode: On"
-      >
-        <span class="knob" aria-hidden="true"></span>
-        <span class="tick" aria-hidden="true">✓</span>
-      </button>
+    header{
+      padding:8px 10px;
+      border-bottom:2px solid var(--brand-soft);
+      display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fff
+    }
+    .brandbox{display:flex;align-items:center;gap:8px}
+    .brandbox img{width:16px;height:16px;display:block;object-fit:contain}
+    .brandbox .word{font-weight:800;letter-spacing:.2px;font-size:13px;white-space:nowrap;color:var(--brand)}
+
+    header .muted{color:var(--muted);font-size:11px;white-space:nowrap}
+
+    .tools{
+      padding:6px 10px;
+      display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);background:#fff
+    }
+    .tools label{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
+
+    /* Delete selected -> right side, brand-soft */
+    #deleteSel{
+      margin-left:auto;
+      border:1px solid var(--brand-soft);
+      background:var(--brand-soft);
+      color:var(--brand);
+      border-radius:8px;padding:6px 10px;font-weight:700;font-size:12px;white-space:nowrap;cursor:pointer
+    }
+    #deleteSel:disabled{opacity:.5;cursor:default}
+
+    .list{flex:1 1 auto;overflow:auto;padding:8px;background:#fff}
+
+    /* Item card — block style with round X on right */
+    .item{
+      position:relative;
+      display:grid;grid-template-columns:28px 56px 1fr;gap:8px;
+      align-items:center;
+      padding:8px 36px 8px 8px; /* room for the small X */
+      border:1px solid var(--border);border-radius:12px;background:var(--card);
+      margin:8px 2px;transition:box-shadow .15s ease,border-color .15s ease;
+    }
+    .item:hover{box-shadow:0 1px 2px rgba(16,24,40,.06);border-color:#dfe3ea}
+    .sel{display:flex;align-items:center;justify-content:center}
+    .sel input{width:16px;height:16px;cursor:pointer}
+
+    .thumb{width:56px;height:56px;border-radius:8px;object-fit:cover;background:#f3f4f6}
+
+    .meta{display:block;min-width:0;text-decoration:none;color:inherit;position:relative;z-index:0}
+    .line1,.line2{display:flex;align-items:center;gap:8px}
+    .line1{justify-content:space-between}
+    .title{font-weight:700;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .price{color:var(--brand);font-weight:800;font-size:12px;white-space:nowrap;flex:0 0 auto}
+    .brand,.domain{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .line2 .brand{min-width:0;flex:1}
+    .line2 .dot{width:3px;height:3px;border-radius:50%;background:#cbd5e1;flex:0 0 auto}
+
+    .del{
+      position:absolute;right:6px;top:6px;
+      width:20px;height:20px;border-radius:999px;border:1px solid #dadde5;
+      background:#fff;color:#4b5563;display:flex;align-items:center;justify-content:center;
+      font-weight:900;font-size:14px;line-height:1;cursor:pointer;z-index:2
+    }
+    .del:hover{border-color:#cfd6de;background:#fafafa;color:#374151}
+
+    .footer{
+      position:sticky;bottom:0;left:0;right:0;background:#fff;
+      border-top:1px solid var(--border);padding:8px 10px;display:grid;gap:6px;
+      box-shadow:0 -4px 10px rgba(17,24,39,.04)
+    }
+    .totals{display:grid;gap:4px}
+    .totals .line{display:flex;align-items:baseline;justify-content:space-between}
+    .totals .label{color:var(--muted);font-size:11px;white-space:nowrap}
+    .totals .value{font-weight:900;font-size:12px;white-space:nowrap}
+    .helper{color:var(--muted);font-size:10px;text-align:right;white-space:nowrap}
+    .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brandbox">
+        <img id="logo" alt="Alligator logo" />
+        <div class="word">Alligator</div>
+      </div>
+      <div class="muted" id="count">0 items</div>
     </header>
 
-    <div class="uc-divider"></div>
-
-    <div class="uc-actions">
-      <button id="clear-all">Clear All</button>
+    <div class="tools">
+      <label>
+        <input type="checkbox" id="toggleAll" />
+        <span>Select all</span>
+      </label>
+      <button id="deleteSel" disabled>Delete selected</button>
     </div>
 
-    <div id="items" class="uc-items">
-      <div class="empty">No items yet.</div>
-    </div>
+    <div class="list" id="list"></div>
 
-    <script type="module" src="popup.js"></script>
-  </body>
+    <div class="footer">
+      <div class="totals">
+        <div class="line">
+          <div class="label">Selected total</div>
+          <div class="value" id="selectedTotal">$0.00</div>
+        </div>
+        <div class="line">
+          <div class="label">All items total</div>
+          <div class="value" id="allTotal">$0.00</div>
+        </div>
+      </div>
+      <div class="helper" id="mixHint"></div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
 </html>
