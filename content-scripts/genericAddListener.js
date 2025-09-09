@@ -973,28 +973,4 @@
     const imgSrcset = img?.getAttribute("srcset") || "";
     const source = document.querySelector("picture source[srcset]");
     const sourceSrcset = source?.getAttribute("srcset") || "";
-    const picked = extractImage();
-    const price = extractPrice();
-    const out = {
-      href: location.href,
-      pdp: looksLikePDP(),
-      ldPresent: !!ld,
-      shopifyJson: !!sj,
-      title: extractTitle(),
-      brand: extractBrand(),
-      price,
-      ogImg,
-      imgSrc, imgSrcset, sourceSrcset,
-      picked
-    };
-    console.log("[UnifiedCart-Generic DEBUG]", out);
-    return out;
-  };
-  window.__UC_FORCE_ADD = () => setTimeout(() => {
-    if (ALLOW_OFF_PDP_HOSTS.test(HOST) && !looksLikePDP()) sendSettledForced(); else sendSettled();
-  }, 200);
-  window.__UC_CART_COUNT = readCartLikeCount;
-
-  if (__UC_MODE.enabled && !STATE.wired) wireAll();
-  log("loaded", { href: location.href, pdp: looksLikePDP(), host: HOST });
-})();
+    con

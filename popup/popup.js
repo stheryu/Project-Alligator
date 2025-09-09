@@ -1,251 +1,129 @@
-/* popup.js — block layout + multi-select + totals + logo fix + robust X-delete */
+/* popup.js — original 4-line card, right-side post-it tabs, working select-all, X-delete, in-popup Manage (Default undeletable) */
 (() => {
-  // Ensure logo path resolves inside extension
+  // Logo
   try {
     const logo = document.getElementById("logo");
     if (logo) logo.src = chrome.runtime.getURL("icons/alligator_icon.png");
   } catch {}
 
+  // DOM
   const listEl = document.getElementById("list");
   const toggleAllEl = document.getElementById("toggleAll");
   const deleteSelEl = document.getElementById("deleteSel");
+  const moveBtn = document.getElementById("moveBtn");
+  const moveMenu = document.getElementById("moveMenu");
+  const tabsEl = document.getElementById("tabs");
+  const frameEl = document.getElementById("frame");
   const countEl = document.getElementById("count");
   const selectedTotalEl = document.getElementById("selectedTotal");
   const allTotalEl = document.getElementById("allTotal");
   const mixHintEl = document.getElementById("mixHint");
 
-  let CART = [];
+  // Manage modal
+  const manageModal = document.getElementById("manageModal");
+  const manageList = document.getElementById("manageList");
+  const manageClose = document.getElementById("manageClose");
+  const addListBtn = document.getElementById("addList");
+  const doneManage = document.getElementById("doneManage");
+
+  // State
+  let LISTS = Object.create(null);
+  let ACTIVE = "Default";
   const selected = new Set();
 
-  // ---------- currency parsing / totals ----------
+  // Helpers
+  const keyOf = it => (String(it?.id || it?.link || "")).toLowerCase();
+  const domainOf = (link="") => { try { return new URL(String(link)).hostname.replace(/^www\./,""); } catch { return ""; } };
+  const escapeHtml = s => String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const dedupe = (arr)=>{ const seen=new Set(), out=[]; for(const it of arr||[]){ const k=keyOf(it); if(k && !seen.has(k)){ seen.add(k); out.push(it); } } return out; };
+
   const CUR_SYM = { "$":"USD", "€":"EUR", "£":"GBP", "¥":"JPY", "₹":"INR" };
-  const PRICE_RE = /([$€£¥₹])\s*([0-9][\d.,]*)|(?:\b(USD|CAD|EUR|GBP|JPY|INR|AUD|CHF|SEK|NOK|DKK)\b)\s*([0-9][\d.,]*)|([0-9][\d.,]*)\s*(USD|CAD|EUR|GBP|JPY|INR|AUD|CHF|SEK|NOK|DKK)\b/i;
-
-  function parsePrice(str) {
-    const s = String(str || "").trim();
-    const m = s.match(PRICE_RE);
-    if (!m) return null;
-    const rawNum = m[2] || m[4] || m[5] || "";
-    const num = rawNum.replace(/[^\d.,]/g,"").replace(/[.,](?=\d{3}\b)/g,"").replace(",",".");
-    const f = parseFloat(num);
-    if (!Number.isFinite(f)) return null;
-    const sym = m[1];
-    const code = (m[3] || m[6] || (sym && CUR_SYM[sym]) || "USD").toUpperCase();
-    return { code, cents: Math.round(f * 100) };
+  const PRICE_RE=/([$€£¥₹])\s*([0-9][\d.,]*)|(?:\b(USD|CAD|EUR|GBP|JPY|INR|AUD|CHF|SEK|NOK|DKK)\b)\s*([0-9][\d.,]*)|([0-9][\d.,]*)\s*(USD|CAD|EUR|GBP|JPY|INR|AUD|CHF|SEK|NOK|DKK)\b/i;
+  function parsePrice(str){
+    const s=String(str||"").trim(); const m=s.match(PRICE_RE); if(!m) return null;
+    const raw=m[2]||m[4]||m[5]||""; const num=raw.replace(/[^\d.,]/g,"").replace(/[.,](?=\d{3}\b)/g,"").replace(",",".");
+    const f=parseFloat(num); if(!Number.isFinite(f)) return null;
+    const sym=m[1]; const code=(m[3]||m[6]||(sym&&CUR_SYM[sym])||"USD").toUpperCase();
+    return { code, cents: Math.round(f*100) };
   }
-
-  function sumByCurrency(items) {
-    const map = {};
-    for (const it of items) {
-      const p = parsePrice(it.price);
-      if (!p) continue;
-      map[p.code] = (map[p.code] || 0) + p.cents;
-    }
-    return map;
-  }
-
-  function fmt(code, cents) {
-    const amount = (cents/100).toFixed(2);
-    if (code === "USD") return `$${amount}`;
-    return `${code} ${amount}`;
-  }
-
-  function formatTotals(map) {
-    const order = ["USD","CAD","EUR","GBP","JPY","INR","AUD","CHF","SEK","NOK","DKK"];
-    const parts = [];
-    for (const k of order) if (map[k]) parts.push(fmt(k, map[k]));
-    for (const k of Object.keys(map)) if (!order.includes(k)) parts.push(fmt(k, map[k]));
+  function sumByCurrency(items){ const map={}; for(const it of items||[]){ const p=parsePrice(it.price); if(!p) continue; map[p.code]=(map[p.code]||0)+p.cents; } return map; }
+  const fmt=(code,cents)=> code==="USD" ? `$${(cents/100).toFixed(2)}` : `${code} ${(cents/100).toFixed(2)}`;
+  function formatTotals(map){
+    const order=["USD","CAD","EUR","GBP","JPY","INR","AUD","CHF","SEK","NOK","DKK"], parts=[];
+    for(const k of order) if(map[k]) parts.push(fmt(k,map[k]));
+    for(const k of Object.keys(map)) if(!order.includes(k)) parts.push(fmt(k,map[k]));
     return parts.join(", ") || "$0.00";
   }
 
-  function updateTotals() {
-    const allMap = sumByCurrency(CART);
-    const selMap = sumByCurrency(CART.filter(it => selected.has(keyOf(it))));
-    allTotalEl.textContent = formatTotals(allMap);
-    selectedTotalEl.textContent = formatTotals(selMap);
-    const mix = (Object.keys(allMap).length > 1 || Object.keys(selMap).length > 1);
-    mixHintEl.textContent = mix ? "Mixed currencies shown separately." : "";
-  }
-
-  // ---------- storage ----------
-  function loadCart(cb) {
+  // Storage
+  function loadAll(cb){
     try {
-      chrome.storage.sync.get({ cart: [] }, ({ cart }) => {
-        CART = Array.isArray(cart) ? cart : [];
-        cb?.();
+      chrome.storage.sync.get({ uc_lists:null, uc_active:null, cart:[] }, (res)=>{
+        LISTS = res.uc_lists && typeof res.uc_lists==="object" ? res.uc_lists : { "Default": [] };
+        if (!("Default" in LISTS)) LISTS["Default"] = LISTS["Default"] || [];
+        ACTIVE = typeof res.uc_active==="string" && res.uc_active in LISTS ? res.uc_active : "Default";
+        const legacy = Array.isArray(res.cart) ? res.cart : [];
+        if (legacy.length){
+          LISTS[ACTIVE] = dedupe([...(LISTS[ACTIVE]||[]), ...legacy]);
+          chrome.storage.sync.set({ uc_lists: LISTS, cart: [] }, ()=>cb?.());
+        } else cb?.();
       });
-    } catch { CART = []; cb?.(); }
+    } catch { LISTS = { "Default": [] }; ACTIVE="Default"; cb?.(); }
   }
-  function saveCart(next, cb) {
-    try { chrome.storage.sync.set({ cart: next }, cb); } catch { cb?.(); }
+  const saveLists = (cb)=> chrome.storage.sync.set({ uc_lists: LISTS, uc_active: ACTIVE }, cb);
+
+  // Tabs
+  const shortTab = (s)=> (s && s.length>12) ? s.slice(0,12)+"…" : (s||"");
+  function renderTabs(){
+    tabsEl.innerHTML="";
+    Object.keys(LISTS).forEach(name=>{
+      const tab=document.createElement("div");
+      tab.className="tab"+(name===ACTIVE?" active":"");
+      tab.textContent = shortTab(name);
+      tab.title = name;
+      tab.addEventListener("click", ()=>{
+        if (ACTIVE!==name){
+          ACTIVE=name; selected.clear();
+          saveLists(()=>{ renderTabs(); renderList(); });
+        }
+      });
+      tabsEl.appendChild(tab);
+    });
   }
 
-  // ---------- rendering ----------
-  const keyOf = (it) => (String(it.id || it.link || "")).toLowerCase();
-
-  function domainOf(link="") {
-    try { return new URL(String(link)).hostname.replace(/^www\./,""); } catch { return ""; }
+  // Totals + select-all reflect
+  function updateTotals(){
+    const items=LISTS[ACTIVE]||[];
+    const all=sumByCurrency(items);
+    const sel=sumByCurrency(items.filter(it=>selected.has(keyOf(it))));
+    allTotalEl.textContent = formatTotals(all);
+    selectedTotalEl.textContent = formatTotals(sel);
+    mixHintEl.textContent = (Object.keys(all).length>1 || Object.keys(sel).length>1) ? "Mixed currencies shown separately." : "";
+  }
+  function reflectSelectAll(){
+    const items=LISTS[ACTIVE]||[];
+    if(!items.length){ toggleAllEl.checked=false; toggleAllEl.indeterminate=false; deleteSelEl.disabled=true; return; }
+    const total=items.length;
+    const selCount=items.reduce((n,it)=>n+(selected.has(keyOf(it))?1:0),0);
+    toggleAllEl.checked = selCount===total;
+    toggleAllEl.indeterminate = selCount>0 && selCount<total;
+    deleteSelEl.disabled = selCount===0;
   }
 
-  function escapeHtml(s){
-    return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
-
-  function render() {
-    listEl.innerHTML = "";
+  // Build list (4-line card + price at right)
+  function renderList(){
+    const items=LISTS[ACTIVE]||(LISTS[ACTIVE]=[]);
+    listEl.innerHTML="";
     selected.clear();
-    toggleAllEl.indeterminate = false;
-    toggleAllEl.checked = false;
+    reflectSelectAll();
+    countEl.textContent = `${items.length} item${items.length===1?"":"s"}`;
 
-    if (!CART.length) {
-      countEl.textContent = "0 items";
-      listEl.innerHTML = `<div class="empty">No items saved yet.</div>`;
+    if(!items.length){
+      listEl.innerHTML=`<div class="empty" style="padding:16px;color:#6b7280;">No items in “${escapeHtml(ACTIVE)}”.</div>`;
       updateTotals();
-      updateDeleteBtn();
       return;
     }
 
-    countEl.textContent = `${CART.length} item${CART.length>1?"s":""}`;
-
-    for (const it of CART) {
-      const id = keyOf(it);
-      const dom = domainOf(it.link);
-      const card = document.createElement("div");
-      card.className = "item";
-      card.dataset.id = id;
-
-      // selection (left)
-      const sel = document.createElement("label");
-      sel.className = "sel";
-      sel.innerHTML = `<input type="checkbox" class="selbox" aria-label="Select item" />`;
-      card.appendChild(sel);
-
-      // thumbnail
-      const img = document.createElement("img");
-      img.className = "thumb";
-      img.src = it.img || "";
-      img.alt = "";
-      card.appendChild(img);
-
-      // meta (clickable to product page)
-      const a = document.createElement("a");
-      a.className = "meta";
-      a.href = it.link || "#";
-      a.target = "_blank";
-      a.rel = "noreferrer";
-      a.innerHTML = `
-        <div class="line1">
-          <div class="title" title="${escapeHtml(it.title||"")}">${escapeHtml(it.title||"")}</div>
-          <div class="price">${escapeHtml(it.price||"")}</div>
-        </div>
-        <div class="line2">
-          <div class="brand" title="${escapeHtml(it.brand||"")}">${escapeHtml(it.brand||"")}</div>
-          <div class="dot"></div>
-          <div class="domain" title="${dom}">${dom}</div>
-        </div>`;
-      card.appendChild(a);
-
-      // delete (small, top-right, dark gray)
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "del";
-      del.setAttribute("aria-label", "Remove");
-      del.textContent = "×";
-      card.appendChild(del);
-
-      listEl.appendChild(card);
-    }
-
-    updateTotals();
-    updateDeleteBtn();
-  }
-
-  // ---------- actions ----------
-  function reflectSelectAll() {
-    if (!CART.length) { toggleAllEl.checked = false; toggleAllEl.indeterminate = false; return; }
-    const total = CART.length;
-    const selCount = CART.reduce((n, it) => n + (selected.has(keyOf(it)) ? 1 : 0), 0);
-    toggleAllEl.checked = selCount === total;
-    toggleAllEl.indeterminate = selCount > 0 && selCount < total;
-  }
-
-  function updateDeleteBtn() {
-    deleteSelEl.disabled = selected.size === 0;
-  }
-
-  function removeOne(id) {
-    const next = CART.filter(it => keyOf(it) !== id);
-    saveCart(next, () => {
-      CART = next;
-      render();
-    });
-  }
-
-  function removeSelected() {
-    if (!selected.size) return;
-    const next = CART.filter(it => !selected.has(keyOf(it)));
-    saveCart(next, () => {
-      CART = next;
-      render();
-    });
-  }
-
-  // ---------- delegated events (fixes X-click conflicts) ----------
-  // Item clicks: open link unless clicking select box or delete
-  listEl.addEventListener("click", (e) => {
-    const delBtn = e.target.closest(".del");
-    if (delBtn) {
-      e.preventDefault(); e.stopPropagation();
-      const card = delBtn.closest(".item");
-      if (card) removeOne(card.dataset.id);
-      return;
-    }
-    const inSel = e.target.closest(".sel");
-    if (inSel) return; // checkbox area; change handler will process
-
-    const card = e.target.closest(".item");
-    if (card) {
-      const a = card.querySelector(".meta");
-      if (a) a.click();
-    }
-  });
-
-  // Selection toggles
-  listEl.addEventListener("change", (e) => {
-    const box = e.target.closest(".selbox");
-    if (!box) return;
-    const card = e.target.closest(".item");
-    if (!card) return;
-    const id = card.dataset.id;
-    if (box.checked) selected.add(id); else selected.delete(id);
-    reflectSelectAll();
-    updateDeleteBtn();
-    updateTotals();
-  });
-
-  // ---------- wire UI ----------
-  toggleAllEl.addEventListener("change", () => {
-    const check = toggleAllEl.checked;
-    selected.clear();
-    if (check) CART.forEach(it => selected.add(keyOf(it)));
-    document.querySelectorAll(".item .selbox").forEach(cb => { cb.checked = check; });
-    reflectSelectAll();
-    updateDeleteBtn();
-    updateTotals();
-  });
-
-  deleteSelEl.addEventListener("click", removeSelected);
-
-  // live updates from background
-  try {
-    chrome.runtime.onMessage.addListener((m) => {
-      if (m && m.action === "CART_UPDATED" && Array.isArray(m.items)) {
-        CART = m.items;
-        render();
-      }
-    });
-  } catch {}
-
-  // init
-  loadCart(render);
-})();
+    for(const it of items){
+      const id=keyOf(it), dom=domainOf(it.link);
+      con
