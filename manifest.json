@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Unified Shopping Cart",
-  "version": "0.1.26",
-  "description": "Aggregate shopping carts across sites into one dashboard.",
+  "name": "Alligator: One Wishlist for Every Store",
+  "version": "2.0",
+  "description": "All your carts in one wishlist. Save items from any store and organize them fast.",
 
   "permissions": [
     "storage",

@@ -137,7 +137,10 @@
         // migrate legacy cart
         const legacy = Array.isArray(res.cart) ? res.cart : [];
         if (legacy.length){
-          LISTS[ACTIVE] = dedupe([...(LISTS[ACTIVE]||[]), ...legacy]);
+          const INBOX = "Default";
+          if (!LISTS[INBOX]) LISTS[INBOX] = [];
+          LISTS[INBOX] = dedupe([...(LISTS[INBOX]||[]), ...legacy]);
+          ensureOrder(); // keeps Default pinned, etc.
           chrome.storage.sync.set({ uc_lists: LISTS, cart: [] }, ()=>cb?.());
         } else cb?.();
       });
@@ -251,6 +254,24 @@
 
     updateTotals();
   }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "sync" || !changes.cart) return;
+
+  const legacy = Array.isArray(changes.cart.newValue) ? changes.cart.newValue : [];
+  if (!legacy.length) return;
+
+  const INBOX = "Default";
+  if (!LISTS[INBOX]) LISTS[INBOX] = [];
+  LISTS[INBOX] = dedupe([...(LISTS[INBOX]||[]), ...legacy]);
+  ensureOrder();
+
+  // clear the cart “inbox” and refresh UI
+  chrome.storage.sync.set({ uc_lists: LISTS, cart: [] }, () => {
+    renderTabs();
+    renderList();   // reflects immediately (even if ACTIVE ≠ "Default")
+  });
+});
 
   // ---------- Mutations ----------
   function removeOne(id){
