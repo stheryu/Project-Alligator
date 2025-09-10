@@ -25,6 +25,16 @@
     if (area === "sync" && changes.shoppingMode) SHOPPING_MODE = !!changes.shoppingMode.newValue;
   });
 
+    // --- popup toggle (uc_enabled) -------------------------------------------
+  let ucEnabled = true;
+  chrome.storage.sync.get({ uc_enabled: true }, ({ uc_enabled }) => { ucEnabled = !!uc_enabled; });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "sync" && changes.uc_enabled) ucEnabled = !!changes.uc_enabled.newValue;
+  });
+
+  // treat "on" as both shopping mode AND the popup toggle being on
+  const isOn = () => SHOPPING_MODE && ucEnabled;
+
   // ---- safe message senders -----------------------------------------------
   function safeRuntimeSendMessage(msg) {
     try { chrome.runtime.sendMessage(msg, () => void chrome.runtime?.lastError); } catch {}
@@ -243,7 +253,11 @@
   // ---- ONE message listener (includes inpage injection) --------------------
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
-      // Inject the inpage hook (requested by content script)
+      if (msg?.type === "UC_SET_ENABLED") {
+        ucEnabled = !!msg.enabled;
+        try { sendResponse({ ok: true }); } catch {}
+        return;
+      }
       if (msg?.action === "INJECT_INPAGE_HOOK") {
         const tabId = sender?.tab?.id;
         if (!tabId) { try { sendResponse({ ok:false, error:"No sender.tab.id" }); } catch {}; return; }
@@ -283,8 +297,8 @@
         return;
       }
 
-      if (msg?.action === "PAGE_ADD_EVENT") {
-        if (!SHOPPING_MODE) { try { sendResponse({ ok: true, ignored: true, reason: "mode_off" }); } catch {}; return; }
+            if (msg?.action === "PAGE_ADD_EVENT") {
+        if (!isOn()) { try { sendResponse({ ok: true, ignored: true, reason: "disabled" }); } catch {}; return; }
         const tabId = sender?.tab?.id;
         if (Number.isInteger(tabId) && shouldNudge(tabId)) {
           safeTabsSendMessage(tabId, { action: "ADD_TRIGGERED", via: msg.via || "inpage", url: msg.url }, { frameId: 0 });
@@ -294,9 +308,9 @@
       }
 
       // ADD_ITEM (fresh read–modify–write to avoid MV3 wipes)
-      if (msg?.action === "ADD_ITEM" && msg.item) {
+            if (msg?.action === "ADD_ITEM" && msg.item) {
         (async () => {
-          if (!SHOPPING_MODE) { try { sendResponse({ ok: true, ignored: true, reason: "mode_off" }); } catch {}; return; }
+          if (!isOn()) { try { sendResponse({ ok: true, ignored: true, reason: "disabled" }); } catch {}; return; }
 
           const current = await loadCart();
           const item = sanitizeItem(msg.item);
@@ -406,7 +420,7 @@
       chrome.webRequest.onBeforeRequest.addListener(
         (details) => {
           try {
-            if (!SHOPPING_MODE) return;
+            if (!isOn()) return;
 
             const { url, method, tabId } = details;
             const m = (method || "").toUpperCase();
@@ -483,7 +497,7 @@
       chrome.webRequest.onBeforeRequest.addListener(
         (details) => {
           try {
-            if (!SHOPPING_MODE) return;
+            if (!isOn()) return;
             const method = (details.method || "").toUpperCase();
             if (!(method === "POST" || method === "PUT" || method === "PATCH")) return;
 
@@ -519,7 +533,7 @@
       chrome.webRequest.onBeforeRequest.addListener(
         (details) => {
           try {
-            if (!SHOPPING_MODE) return;
+            if (!isOn()) return;
 
             const method = (details.method || "").toUpperCase();
             if (!(method === "POST" || method === "PUT" || method === "PATCH")) return;
@@ -553,7 +567,7 @@
       chrome.webRequest.onBeforeRequest.addListener(
         (details) => {
           try {
-            if (!SHOPPING_MODE) return;
+            if (!isOn()) return;
 
             const method = (details.method || "").toUpperCase();
             if (!(method === "POST" || method === "PUT" || method === "PATCH")) return;
@@ -607,7 +621,7 @@ function nudgeUniqloTabsAny(tabIdMaybe) {
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     try {
-      if (!SHOPPING_MODE) return;
+      if (!isOn()) return;
       const m = (details.method || "").toUpperCase();
       if (!(m === "POST" || m === "PUT" || m === "PATCH")) return;
 

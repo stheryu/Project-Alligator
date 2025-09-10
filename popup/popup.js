@@ -23,6 +23,8 @@
   const selectedTotalEl = document.getElementById("selectedTotal");
   const allTotalEl = document.getElementById("allTotal");
   const mixHintEl = document.getElementById("mixHint");
+  const extToggleEl     = document.getElementById("extToggle");
+  const extToggleLabel  = document.getElementById("extToggleLabel");
 
   // Manage modal
   const manageModal = document.getElementById("manageModal");
@@ -36,7 +38,6 @@
   if (manageClose) manageClose.style.display = "none";
   if (addListBtn) addListBtn.remove();
   if (modalFoot) {
-    // style Done green
     if (doneManage) {
       doneManage.classList.add("btn");
       doneManage.style.background = "var(--green)";
@@ -44,7 +45,6 @@
       doneManage.style.borderColor = "var(--green)";
       doneManage.style.fontWeight = "800";
     }
-    // inject / restyle Cancel pink
     let cancelManage = modalFoot.querySelector("#cancelManage");
     if (!cancelManage) {
       cancelManage = document.createElement("button");
@@ -75,12 +75,12 @@
   let hintTarget  = null;
   let hintBefore  = false;
 
-function clearRowHints(){
-  manageList.querySelectorAll(".manage-row").forEach(r=>{
-    r.classList.remove("drop-before","drop-after","dragging");
-  });
-  hintTarget = null; hintBefore = false;
-}
+  function clearRowHints(){
+    manageList.querySelectorAll(".manage-row").forEach(r=>{
+      r.classList.remove("drop-before","drop-after","dragging");
+    });
+    hintTarget = null; hintBefore = false;
+  }
 
   // ---------- Helpers ----------
   const keyOf = it => String(it?.id || it?.link || "").toLowerCase();
@@ -91,6 +91,11 @@ function clearRowHints(){
   const dedupe = (arr=[]) => { const seen=new Set(), out=[]; for(const it of arr){ const k=keyOf(it); if(k && !seen.has(k)){ seen.add(k); out.push(it); } } return out; };
   const deepCopy = (obj) => JSON.parse(JSON.stringify(obj));
 
+  function reflectEnabledUI(on){
+    document.documentElement.classList.toggle("ext-off", !on);
+    if (extToggleEl)    extToggleEl.checked = !!on;
+    if (extToggleLabel) extToggleLabel.textContent = on ? "On" : "Off";
+  }
   function ensureOrder(base = LISTS, order = ORDER){
     const names = Object.keys(base);
     const out = [];
@@ -172,12 +177,25 @@ function clearRowHints(){
 
   // ---------- Totals & Select-all ----------
   function updateTotals(){
-    const items=LISTS[ACTIVE]||[];
-    const all=sumByCurrency(items);
-    const sel=sumByCurrency(items.filter(it=>selected.has(keyOf(it))));
-    allTotalEl.textContent = formatTotals(all);
-    selectedTotalEl.textContent = formatTotals(sel);
-    mixHintEl.textContent = (Object.keys(all).length>1 || Object.keys(sel).length>1) ? "Mixed currencies shown separately." : "";
+    const items = LISTS[ACTIVE] || [];
+    const selItems = items.filter(it => selected.has(keyOf(it)));
+
+    const allMap = sumByCurrency(items);
+    const selMap = sumByCurrency(selItems);
+    allTotalEl.textContent      = formatTotals(allMap);
+    selectedTotalEl.textContent = formatTotals(selMap);
+
+    const allCount = items.length;
+    const selCount = selItems.length;
+    countEl.innerHTML = `
+      <div>Selected: <span class="num sel-count">${selCount} item${selCount===1?"":"s"}</span></div>
+      <div>All: <span class="num all-count">${allCount} item${allCount===1?"":"s"}</span></div>
+    `;
+
+    mixHintEl.textContent =
+      (Object.keys(allMap).length > 1 || Object.keys(selMap).length > 1)
+        ? "Mixed currencies shown separately."
+        : "";
   }
   function reflectSelectAll(){
     const items=LISTS[ACTIVE]||[];
@@ -277,6 +295,15 @@ function clearRowHints(){
     }
   }, true);
 
+  if (extToggleEl){
+    extToggleEl.addEventListener("change", ()=>{
+      const on = !!extToggleEl.checked;
+      chrome.storage.sync.set({ uc_enabled: on });
+      reflectEnabledUI(on);
+      try { chrome.runtime.sendMessage({ type: "UC_SET_ENABLED", enabled: on }); } catch {}
+    });
+  }
+
   deleteSelEl.addEventListener("click", removeSelected);
 
   // ---------- Move menu (no + New; bold green Add/Manage) ----------
@@ -321,7 +348,6 @@ function clearRowHints(){
 
   // ---------- Manage lists (drag inside modal) ----------
   function openManageModal(){
-    // seed drafts
     DRAFT = deepCopy(LISTS);
     DRAFT_ORDER = ensureOrder(DRAFT, ORDER);
     ACTIVE_DRAFT = ACTIVE;
@@ -356,120 +382,97 @@ function clearRowHints(){
   }
 
   function getDraggableRows(){
-    // skip Default and the bottom "new-row"
     return Array.from(manageList.querySelectorAll('.manage-row[draggable="true"]'));
   }
-  function clearRowHints(){
-    manageList.querySelectorAll(".manage-row").forEach(r=>{
-      r.classList.remove("drop-before","drop-after","dragging");
-    });
-    hintTarget = null; hintBefore = false;
-  }
-  // Replace existing computeDropFromY with this:
-function computeDropFromY(clientY){
-  const rows = Array.from(manageList.querySelectorAll('.manage-row[draggable="true"]'));
-  if (!rows.length) return { target:null, before:false };
 
-  // If we're above the first draggable row's midline → "before first"
-  const firstRect = rows[0].getBoundingClientRect();
-  if (clientY < (firstRect.top + firstRect.height/2)) {
-    return { target: rows[0], before: true };
-  }
+  function computeDropFromY(clientY){
+    const rows = Array.from(manageList.querySelectorAll('.manage-row[draggable="true"]'));
+    if (!rows.length) return { target:null, before:false };
 
-  // Otherwise, find the first row whose midline is below the pointer
-  for (let i = 0; i < rows.length; i++){
-    const rect = rows[i].getBoundingClientRect();
-    if (clientY < (rect.top + rect.height/2)){
-      return { target: rows[i], before: true };
+    const firstRect = rows[0].getBoundingClientRect();
+    if (clientY < (firstRect.top + firstRect.height/2)) {
+      return { target: rows[0], before: true };
     }
+    for (let i = 0; i < rows.length; i++){
+      const rect = rows[i].getBoundingClientRect();
+      if (clientY < (rect.top + rect.height/2)){
+        return { target: rows[i], before: true };
+      }
+    }
+    return { target: rows[rows.length - 1], before: false };
   }
 
-  // Pointer is below all mids → after the last draggable row
-  return { target: rows[rows.length - 1], before: false };
-}
   function wireManageDrag(){
-  // Wire per-row handlers (these rows are re-rendered each time)
-  Array.from(manageList.querySelectorAll('.manage-row[draggable="true"]')).forEach(row=>{
-    const name = row.dataset.name;
+    Array.from(manageList.querySelectorAll('.manage-row[draggable="true"]')).forEach(row=>{
+      const name = row.dataset.name;
 
-    row.addEventListener("dragstart",(e)=>{
-      draggingRow = name;
-      row.classList.add("dragging");
-      try {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", name);
-        // tiny transparent drag image to remove weird default ghosts
-        const ghost = document.createElement("canvas");
-        ghost.width = 1; ghost.height = 1;
-        e.dataTransfer.setDragImage(ghost, 0, 0);
-      } catch {}
+      row.addEventListener("dragstart",(e)=>{
+        draggingRow = name;
+        row.classList.add("dragging");
+        try {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", name);
+          const ghost = document.createElement("canvas");
+          ghost.width = 1; ghost.height = 1;
+          e.dataTransfer.setDragImage(ghost, 0, 0);
+        } catch {}
+      });
+
+      row.addEventListener("dragend",()=>{
+        draggingRow = null;
+        clearRowHints();
+      });
+
+      row.addEventListener("dragover",(e)=>{ e.preventDefault(); });
+      row.addEventListener("drop",(e)=>{ e.preventDefault(); });
     });
 
-    row.addEventListener("dragend",()=>{
-      draggingRow = null;
+    if (manageDragWired) return;
+    manageDragWired = true;
+
+    manageList.addEventListener("dragover",(e)=>{
+      if (!draggingRow) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = "move"; } catch {}
+      const { target, before } = computeDropFromY(e.clientY);
       clearRowHints();
+      if (target){
+        hintTarget = target; hintBefore = before;
+        target.classList.add(before ? "drop-before" : "drop-after");
+      }
     });
 
-    // keep default prevented so drops are allowed
-    row.addEventListener("dragover",(e)=>{ e.preventDefault(); });
-    row.addEventListener("drop",(e)=>{ e.preventDefault(); }); // handled by container
-  });
+    manageList.addEventListener("drop",(e)=>{
+      if (!draggingRow) return;
+      e.preventDefault();
+      let { target, before } = computeDropFromY(e.clientY);
+      clearRowHints();
 
-  // Attach container-level handlers ONLY ONCE
-  if (manageDragWired) return;
-  manageDragWired = true;
+      const fromIdx = DRAFT_ORDER.indexOf(draggingRow);
+      if (fromIdx < 0) return;
 
-  manageList.addEventListener("dragover",(e)=>{
-    if (!draggingRow) return;
-    e.preventDefault();
-    try { e.dataTransfer.dropEffect = "move"; } catch {}
+      let toIdx;
+      if (target){
+        const overName = target.dataset.name;
+        const overIdx  = DRAFT_ORDER.indexOf(overName);
+        if (overIdx < 0) return;
+        toIdx = before ? overIdx : overIdx + 1;
+      } else {
+        toIdx = DRAFT_ORDER.length;
+      }
 
-    const { target, before } = computeDropFromY(e.clientY);
-    clearRowHints();
-    if (target){
-      hintTarget = target; hintBefore = before;
-      target.classList.add(before ? "drop-before" : "drop-after");
-    }
-  });
+      if (toIdx <= 0) toIdx = 1;
 
-  manageList.addEventListener("drop",(e)=>{
-    if (!draggingRow) return;
-    e.preventDefault();
+      const arr = DRAFT_ORDER.slice();
+      arr.splice(fromIdx, 1);
+      if (fromIdx < toIdx) toIdx -= 1;
+      if (toIdx === fromIdx) return;
 
-    // Recompute on drop to match the visible guide line exactly
-    let { target, before } = computeDropFromY(e.clientY);
-    clearRowHints();
-
-    const fromIdx = DRAFT_ORDER.indexOf(draggingRow);
-    if (fromIdx < 0) return;
-
-    // Compute insertion index in DRAFT_ORDER
-    let toIdx;
-    if (target){
-      const overName = target.dataset.name;
-      const overIdx  = DRAFT_ORDER.indexOf(overName);
-      if (overIdx < 0) return;
-      toIdx = before ? overIdx : overIdx + 1;
-    } else {
-      toIdx = DRAFT_ORDER.length; // append
-    }
-
-    // Never allow placing before index 0 (Default is pinned there)
-    if (toIdx <= 0) toIdx = 1;
-
-    // Standard remove-then-insert with forward-shift correction
-    const arr = DRAFT_ORDER.slice();
-    arr.splice(fromIdx, 1);
-    if (fromIdx < toIdx) toIdx -= 1;
-    if (toIdx === fromIdx) return;
-
-    arr.splice(toIdx, 0, draggingRow);
-    DRAFT_ORDER = arr;
-
-    // Re-render to reflect the new order
-    renderManageList();
-  });
-}
+      arr.splice(toIdx, 0, draggingRow);
+      DRAFT_ORDER = arr;
+      renderManageList();
+    });
+  }
 
   // clicks inside Manage: add / rename / delete
   if (manageList){
@@ -477,7 +480,6 @@ function computeDropFromY(clientY){
       const row = e.target.closest(".manage-row");
       if (!row) return;
 
-      // Add new
       if (e.target.classList.contains("new-add")){
         const inp = row.querySelector(".new-name");
         const name = (inp && inp.value || "").trim();
@@ -492,7 +494,6 @@ function computeDropFromY(clientY){
       const name = row.dataset.name || "";
       const isDefault = row.dataset.lock === "1" || /^default$/i.test(name);
 
-      // Delete
       if (e.target.classList.contains("rm")){
         if (isDefault) return;
         if (confirm(`Delete list “${name}”?`)){
@@ -509,7 +510,6 @@ function computeDropFromY(clientY){
         return;
       }
 
-      // Rename
       if (e.target.classList.contains("rn")){
         if (isDefault) return;
         const nm = row.querySelector(".nm");
@@ -576,4 +576,7 @@ function computeDropFromY(clientY){
 
   // ---------- Init ----------
   loadAll(()=>{ renderTabs(); renderList(); });
+  chrome.storage.sync.get({ uc_enabled: true }, ({ uc_enabled }) => {
+    reflectEnabledUI(!!uc_enabled);
+  });
 })();
